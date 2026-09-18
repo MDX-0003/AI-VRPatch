@@ -24,7 +24,7 @@ from ..case import load_sidecar_single_segment
 from ..composite import SegmentMaps
 from ..framealign import index_map, short_by
 from ..media import FfmpegSink, ffmpeg_path, has_audio
-from ..progress import Log, RateMeter, format_duration
+from ..progress import Log, RateMeter, format_duration, open_log_file
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -99,7 +99,9 @@ def merge(
     quiet: bool = typer.Option(False, "-q"),
 ):
     t_start = time.time()
-    log = Log(every=progress_every, quiet=quiet)
+    fh, log_path = open_log_file(f"merge_{output.stem}")
+    log = Log(every=progress_every, quiet=quiet, fh=fh)
+    typer.echo(f"log -> {log_path}")
 
     # ---- 1. sidecar (single segment, loud) -----------------------------------
     log.phase(f"sidecar: {sidecar}")
@@ -221,6 +223,8 @@ def merge(
             "elapsed_s": round(time.time() - t_start, 1),
         }, indent=2), encoding="utf-8")
         typer.echo(f"report -> {report}")
+
+    fh.close()
 
 
 def fps_of(path) -> float:

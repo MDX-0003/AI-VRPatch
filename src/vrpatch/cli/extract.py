@@ -1,7 +1,13 @@
 """vrpatch-extract: ERP video -> viewport clip + sidecar + inner mask.
 
-The mask is part of the extract contract (black = region the external AI tool
-regenerates, white = fixed anchor margin); test_extract_contract enforces it.
+Streaming: one 8K source frame (~96 MB) is decoded, projected and written at a
+time — never load the frame range into a list (590 frames would be ~55 GB and
+thrash the machine; that was tried once and is why this module looks the way it
+does). The mask is part of the extract contract (black = region the external AI
+tool regenerates, white = fixed anchor margin); test_extract_contract enforces
+it.
+
+Every run mirrors its console output to logs/<name>_<timestamp>.log.
 """
 
 from __future__ import annotations
@@ -12,25 +18,39 @@ import cv2
 import numpy as np
 import typer
 
-from ..case import Case, load_case, case_to_sidecar, save_sidecar_for_case
+from ..case import Case, load_case
 from ..sidecar import Sidecar, Segment, Viewport, InnerRect, save_sidecar
-from ..extract import extract_segment, write_clip, make_mask_image
+from ..extract import extract_viewport_frame, open_writer, make_mask_image
+from ..progress import Log, RateMeter, open_log_file
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
 
-def _extract(frames, fps, seg: Segment, clip_path: Path, sidecar_path: Path,
-             mask_path: Path, erp_size: tuple[int, int]):
-    clip = extract_segment(frames, seg)
-    write_clip(clip, str(clip_path), fps)
+def _stream_extract(cap, fps, seg: Segment, clip_path: Path, sidecar_path: Path,
+                    mask_path: Path, erp_size: tuple[int, int], log: Log):
+    n = seg.frame_end - seg.frame_start + 1
+    meter = RateMeter(n)
+    writer = open_writer(str(clip_path), fps, (seg.viewport.width, seg.viewport.height))
+    written = 0
+    for _ in range(n):
+        ok, frame = cap.read()
+        if not ok:
+            log.info(f"source ended early at frame {written} of {n}")
+            break
+        writer.write(extract_viewport_frame(frame, seg.viewport))
+        written += 1
+        meter.tick()
+        log.progress(meter, "extracting")
+    writer.release()
+
     mask = make_mask_image(seg.viewport, seg.inner)
     cv2.imwrite(str(mask_path), mask)
     sc = Sidecar(erp_width=erp_size[0], erp_height=erp_size[1], fps=fps,
                  segments=[seg])
     save_sidecar(sc, sidecar_path)
-    typer.echo(f"clip     -> {clip_path} ({clip.shape[0]} frames)")
-    typer.echo(f"sidecar  -> {sidecar_path}")
-    typer.echo(f"mask     -> {mask_path} (black=regenerate, white=anchor)")
+    log.phase(f"clip    -> {clip_path} ({written} frames)")
+    log.phase(f"sidecar -> {sidecar_path}")
+    log.phase(f"mask    -> {mask_path} (black=regenerate, white=anchor)")
 
 
 @app.command("case")
@@ -42,28 +62,29 @@ def from_case(
     case: Case = load_case(case_file)  # raises on hash mismatch
     out = out_dir or (case_file.parent / "derived")
     out.mkdir(parents=True, exist_ok=True)
-    src = case.source.path
-    if not Path(src).is_absolute():
-        src = str(case_file.parent / src)
-    cap = cv2.VideoCapture(src)
-    if not cap.isOpened():
-        raise typer.Exit(f"cannot open video: {src}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or case.fps
-    seg = Segment(id="seg_0", frame_start=case.frame_start,
-                  frame_end=case.frame_end, viewport=case.viewport,
-                  inner=case.inner)
-    # stream the frame range rather than loading the whole ERP video
-    frames = []
-    cap.set(cv2.CAP_PROP_POS_FRAMES, case.frame_start)
-    for _ in range(case.frame_end - case.frame_start + 1):
-        ok, f = cap.read()
-        if not ok:
-            break
-        frames.append(f)
-    cap.release()
-    _extract(frames, fps, seg, out / "clip.mp4", out / "clip.json",
-             out / "clip_mask.png",
-             (case.erp_width, case.erp_height))
+    fh, log_path = open_log_file(f"extract_{case.name}")
+    log = Log(fh=fh)
+    try:
+        log.phase(f"case: {case_file} (source sha256 verified)")
+        src = case.source.path
+        if not Path(src).is_absolute():
+            src = str(case_file.parent / src)
+        cap = cv2.VideoCapture(src)
+        if not cap.isOpened():
+            raise typer.Exit(f"cannot open video: {src}")
+        fps = cap.get(cv2.CAP_PROP_FPS) or case.fps
+        seg = Segment(id="seg_0", frame_start=case.frame_start,
+                      frame_end=case.frame_end, viewport=case.viewport,
+                      inner=case.inner)
+        if not cap.set(cv2.CAP_PROP_POS_FRAMES, case.frame_start):
+            log.info("WARNING: could not seek; decoding from the start instead.")
+        _stream_extract(cap, fps, seg, out / "clip.mp4", out / "clip.json",
+                        out / "clip_mask.png",
+                        (case.erp_width, case.erp_height), log)
+        cap.release()
+        log.phase(f"log -> {log_path}")
+    finally:
+        fh.close()
 
 
 @app.command("args")
@@ -87,22 +108,25 @@ def from_args(
                   viewport=Viewport(yaw_deg=yaw, pitch_deg=pitch,
                                     fov_h_deg=fov, width=vpw, height=vph),
                   inner=InnerRect(x=ix, y=iy, width=iw, height=ih))
-    cap = cv2.VideoCapture(str(input_video))
-    if not cap.isOpened():
-        raise typer.Exit(f"cannot open video: {input_video}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    erp_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    erp_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    frames = []
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start)
-    for _ in range(end - start + 1):
-        ok, f = cap.read()
-        if not ok:
-            break
-        frames.append(f)
-    cap.release()
-    _extract(frames, fps, seg, clip, sidecar,
-             mask or clip.with_name(clip.stem + "_mask.png"), (erp_w, erp_h))
+    fh, log_path = open_log_file(f"extract_{input_video.stem}")
+    log = Log(fh=fh)
+    try:
+        log.phase(f"input: {input_video}")
+        cap = cv2.VideoCapture(str(input_video))
+        if not cap.isOpened():
+            raise typer.Exit(f"cannot open video: {input_video}")
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        erp_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        erp_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if not cap.set(cv2.CAP_PROP_POS_FRAMES, start):
+            log.info("WARNING: could not seek; decoding from the start instead.")
+        _stream_extract(cap, fps, seg, clip, sidecar,
+                        mask or clip.with_name(clip.stem + "_mask.png"),
+                        (erp_w, erp_h), log)
+        cap.release()
+        log.phase(f"log -> {log_path}")
+    finally:
+        fh.close()
 
 
 if __name__ == "__main__":
