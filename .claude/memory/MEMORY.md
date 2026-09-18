@@ -1,3 +1,4 @@
 - [项目概览与布局](project-overview.md) — 功能、目录、单段与契约等硬性规则入口
 - [像素回归基线](pixel-baseline.md) — 编码参数是基线的一部分；回归不达 0 的判定顺序
 - [web pick 坐标换算](pick-coordinate-flow.md) — 两级缩放链路，改预览分辨率必查
+- [拖拽 overlay 坐标铁律](js-drag-overlay-coords.md) — clientX 必须经 getBoundingClientRect 换算，禁与 offsetLeft 混算
