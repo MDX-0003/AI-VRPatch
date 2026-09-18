@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>vrpatch pick — __CASE__</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #141414; color: #ddd; margin: 1rem; }
+  h1 { font-size: 1.1rem; }
+  .col { display: inline-block; vertical-align: top; margin-right: 1.5rem; }
+  .wrap { position: relative; display: inline-block; }
+  img { display: block; border: 1px solid #444; cursor: crosshair; }
+  #innerBox { position: absolute; border: 2px dashed #f33; pointer-events: none; display: none; }
+  .meta { font-size: .85rem; color: #9a9; min-height: 1.2em; }
+  form { display: inline; }
+</style>
+</head>
+<body>
+<h1>vrpatch pick — __CASE__</h1>
+<span class="meta">__MSGS__</span>
+<div class="col">
+  <div class="meta">① 全景（点击设视口中心）</div>
+  <form method="post" action="/pick/erp">
+    <input type="image" name="erp" src="__ERP__" alt="erp"
+           style="width:640px" onclick="markClick(this.form)">
+    <input type="hidden" name="fx" id="fx"><input type="hidden" name="fy" id="fy">
+  </form>
+  <div class="meta">yaw __YAW__ pitch __PITCH__ fov __FOV__</div>
+</div>
+<div class="col">
+  <div class="meta">② 视口（拖拽设内圈，松手提交）</div>
+  <div class="wrap" id="vpWrap">
+    <img id="vpImg" src="__VP__" alt="viewport" width="640" draggable="false">
+    <div id="innerBox"></div>
+  </div>
+  <div class="meta">inner __IN__</div>
+  <form method="post" action="/pick/inner" id="innerForm">
+    <input type="hidden" name="x"><input type="hidden" name="y">
+    <input type="hidden" name="w"><input type="hidden" name="h">
+  </form>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

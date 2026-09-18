@@ -1,0 +1,30 @@
+name = "canal_dance"
+notes = "8K ERP dance case; baseline parameters verified pixel-exact by the port verification suite (see docs/knowledge/verification.md)"
+
+[source]
+# Relative to this case.toml; sha256 is verified on every load and by
+# `vrpatch-extract case`.
+path = "source/Mono_dance_4k.mp4"
+sha256 = "5f35eb54aaa6baf5e80c00b78369ae0791ae0113def90834d1781ea158c8f247"
+
+[erp]
+width = 8000
+height = 4000
+fps = 60.0
+
+[frames]
+start = 0
+end = 589
+
+[viewport]
+yaw_deg = -1.1
+pitch_deg = -12.1
+fov_h_deg = 59.0
+width = 1920
+height = 1080
+
+[inner]
+x = 480
+y = 270
+width = 960
+height = 540

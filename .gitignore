@@ -1,0 +1,17 @@
+# media and derived products
+*.mp4
+*.aaa
+cases/*/source/
+cases/*/derived/
+debug_*.png
+*_f*.png
+pick-after.png
+
+# python
+__pycache__/
+.venv/
+*.pyc
+.pytest_cache/
+
+# editor/os
+Thumbs.db
