@@ -21,8 +21,12 @@ src/vrpatch/
 ├── case.py           case.toml ↔ Case ↔ clip.json；sha256 校验；单段守卫
 ├── detect.py         propose_inner 扩展点（自动内圈建议，默认返回居中半幅）
 ├── progress.py       Log / RateMeter（TTY \r 刷新 vs 重定向整行的自适应）
-├── cli/{extract,merge,pick}.py   三个 console script（typer）
-└── web/{app,render}.py + templates/ + static/   本地选区 web（服务端渲染，零 npm）
+├── cli/{extract,merge,serve,pick}.py   console scripts（typer）；serve=网页总入口，pick 是其别名
+└── web/
+    ├── app.py        dashboard 后端（REST API + 页面路由）
+    ├── tasks.py      单任务队列：extract/merge 以 subprocess 跑 CLI，日志落 logs/ 供前端 tail
+    ├── render.py     选区预览渲染（源帧解码一次缓存 4K 副本，预览限宽 1024/960）
+    └── templates/ + static/   服务端渲染 + 原生 JS（零 npm，轮询，无构建链）
 tests/                pytest；reference.py = 参考实现（回归门槛 4 的对比对象）
 tools/                独立脚本（视频比对、契约比对），不入包
 cases/<name>/         case.toml（唯一真源） + source/（源素材，gitignored） + derived/（产物，gitignored）
@@ -38,7 +42,8 @@ docs/                 分层文档（见 docs/README.md）
 4. **不允许模块级可变缓存**；每段几何由调用方持有（`SegmentMaps` 建一次用整段）。
 5. **投影/合成几何不得改动**，除非 `tests/test_stitch_identity`（新实现 vs `tests/reference.py`）保持 `maxdiff==0`，且 `docs/knowledge/verification.md` 的像素回归重跑通过。
 6. **编码参数（libx264 crf/preset、bgr24 rawvideo、两遍音频 mux）是基线的一部分**：改动即破坏门槛 2，必须重立基线并记录。
-7. 派生产物（`cases/*/derived/`、`*.mp4`、`debug_*.png`）不入 git；`case.toml` 必须记录源文件 sha256，且加载时校验。
+7. 派生产物（`cases/*/derived/`、`logs/`、`sources/`、`*.mp4`、`debug_*.png`）不入 git；`case.toml` 必须记录源文件 sha256，且加载时校验。
+8. **web 与 CLI 共享同一条执行路径**：网页后台任务以 subprocess 调 `python -m vrpatch.cli.*`，不复制流水线逻辑；`case.toml` 是唯一真源，web 只写它 + 触发 CLI。
 
 ## 代码规范
 

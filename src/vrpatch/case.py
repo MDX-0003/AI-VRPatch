@@ -40,6 +40,7 @@ class Case:
     viewport: Viewport
     inner: InnerRect
     notes: str = ""
+    ai_clip: str | None = None  # path to the external tool's output, set when known
 
 
 def _sha256_of(path: Path, chunk=1 << 20) -> str:
@@ -70,10 +71,36 @@ def load_case(path: str | Path, *, verify: bool = True) -> Case:
         viewport=Viewport(**d["viewport"]),
         inner=InnerRect(**d["inner"]),
         notes=d.get("notes", ""),
+        ai_clip=d.get("ai_clip", {}).get("path"),
     )
     if verify:
         verify_case(p, case)
     return case
+
+
+def set_ai_clip(case_path: str | Path, ai_path: str) -> None:
+    """Record (or clear with None) the external tool's output path in the
+    optional [ai_clip] section, textual and section-scoped like the other
+    case.toml writers."""
+    p = Path(case_path)
+    text = p.read_text(encoding="utf-8")
+    # TOML literal string (single quotes): backslashes need no escaping, which
+    # is what Windows paths want.
+    section = f"[ai_clip]\npath = '{ai_path}'\n"
+    if "[ai_clip]" in text:
+        lines, in_sec = [], False
+        for line in text.splitlines():
+            if line.strip() == "[ai_clip]":
+                in_sec = True
+                continue  # drop the old section header along with its keys
+            if in_sec and line.strip().startswith("[") and line.strip().endswith("]"):
+                in_sec = False
+            if not in_sec:
+                lines.append(line)
+        text = "\n".join(lines) + "\n"
+    if ai_path:
+        text = text.rstrip("\n") + "\n\n" + section
+    p.write_text(text, encoding="utf-8")
 
 
 def verify_case(case_path: str | Path, case: Case | None = None) -> None:

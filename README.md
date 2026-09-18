@@ -10,50 +10,41 @@
 2. AI 只重绘这一小块；
 3. 把重绘结果**贴回原位**——块外逐像素不动，块边缘做融合，看不出接缝。
 
-全程三步，对应三个命令：
-
 ```
-① vrpatch-extract        ② 你自己拿去跑 AI           ③ vrpatch-merge
-   抠出小块画面+蒙版   →    （VACE / Viggle / …）    →    贴回全景，输出成品
-        ↑
-   （选区域用 vrpatch-pick，网页上点点就行）
+① Extract            ② 你自己拿去跑 AI            ③ Merge
+   抠出小块画面+蒙版 →    （VACE / Viggle / …）   →    贴回全景，输出成品
+        ↑                                         
+   （选区域用网页上的选区面板，点点拖拖就行）
 ```
 
-中间第 ② 步必须由人完成（AI 工具是外部的），所以是三个命令而不是一个。
+中间第 ② 步必须由人完成（AI 工具是外部的），所以流水线断成两段。
 
-## 快速上手（用自带案例）
+## 快速上手
 
 前提：装好 [uv](https://docs.astral.sh/uv/)、Python 3.11、ffmpeg（在 PATH 上）。
 
 ```bash
-uv sync --extra dev                 # 安装依赖
-uv run pytest                       # 自检，应显示 14 passed
-
-# ① 从案例的全景视频里抠出人物区域（源视频已含在案例目录）
-uv run vrpatch-extract case cases/canal_dance/case.toml
-
-# ② 把 cases/canal_dance/derived/ 里的 clip.mp4 + clip_mask.png 交给你的 AI 工具重绘，
-#    得到 ai_clip.mp4（本仓库不管这一步）
-
-# ③ 贴回（此处直接用 clip.mp4 演示"AI 未改动"的情形，产出的全景应与原片一致）
-uv run vrpatch-merge --input cases/canal_dance/source/Mono_dance_4k.mp4 \
-    --ai cases/canal_dance/derived/clip.mp4 \
-    --sidecar cases/canal_dance/derived/clip.json \
-    --output cases/canal_dance/derived/out.mp4
+uv sync --extra web,dev         # 安装依赖（纯命令行使用可去掉 web）
+uv run pytest                   # 自检，应显示 14 passed
+uv run vrpatch-serve            # 启动控制台，浏览器打开 http://127.0.0.1:8760
 ```
 
-## 选区域：vrpatch-pick
+**推荐：全程在网页（vrpatch 控制台）上操作。** 把源视频放进项目根的 `sources/` 目录，然后：
 
-```bash
-uv sync --extra web
-uv run vrpatch-pick cases/canal_dance/case.toml     # 浏览器打开 http://127.0.0.1:8760
-```
+1. **新建案例**：左侧素材库下拉框选视频，一键生成案例；
+2. **选区**：全景图点一下定视口中心；视口图上拖框圈住人物，松手保存；
+3. **Extract**：点按钮后台执行，页面实时显示帧进度与日志；
+4. 把 `cases/<案例>/derived/` 里的 `clip.mp4 + clip_mask.png` 交给外部 AI 工具重绘；
+5. **选入 AI 结果**：点按钮浏览本机目录，指认 AI 产出的 `ai_clip.mp4`；
+6. **Merge**：点按钮贴回全景，成品在 `cases/<案例>/derived/out.mp4`。
 
-网页左边是整幅全景，**点哪里，观察中心就在哪里**；右边是抠出来的画面，**按住鼠标拖一个框**圈住人物，松手即保存。结果写进 `case.toml`，下次 extract 自动使用。
+命令行始终可用（与网页驱动同一套代码，适合脚本化）：`vrpatch-extract case <case.toml>` 抽取、
+`vrpatch-merge --input <全景> --ai <AI结果> --sidecar <clip.json> --output <成品>` 合并。
+每次 extract/merge 运行都会同时在 `logs/` 下写一份带时间戳的日志。
 
 ## case.toml：一个任务的全部配置
 
-每个任务一个文件夹（如 `cases/canal_dance/`），里面的 `case.toml` 记录：
+每个案例一个文件夹（`cases/<名字>/`），`case.toml` 记录全部配置，是唯一真源：
 
 | 段 | 含义 |
 | --- | --- |
@@ -61,18 +52,19 @@ uv run vrpatch-pick cases/canal_dance/case.toml     # 浏览器打开 http://127
 | `[frames]` | 处理哪一段帧（start/end） |
 | `[viewport]` | 在全景的什么位置开"观察窗口"（方向 yaw/pitch、视野角 fov、窗口像素宽高） |
 | `[inner]` | 窗口内哪一块是要 AI 重绘的人物区（x/y/宽高，其余部分贴回时保持原样） |
+| `[ai_clip]` | （可选）外部 AI 产物路径，由网页"选入 AI 结果"写入 |
 
-它是唯一需要人工维护的配置；`derived/clip.json` 由它自动生成，供命令行传参用，**不要手改**。
+`derived/clip.json` 由它自动生成、供命令行传参，是**对外契约**（字段集冻结），不要手改。
 
 ## 常用场景
 
-- **换素材**：新建 `cases/<名字>/`，放好 `case.toml`（照抄案例改数字）和 `source/`，跑一遍 pick 调区域。
-- **只想微调位置**：改 `case.toml` 里的 `[viewport]`/`[inner]` 数字，或用 pick 拖一下，重跑 extract。
-- **改了 merge 相关代码**：跑 `uv run pytest`（秒级）；再动了编码/几何，按 `docs/knowledge/verification.md` 重跑像素回归。
+- **换素材**：丢进 `sources/`，网页上新建案例即可。
+- **微调选区**：网页上重新点/拖，或直接改 `case.toml` 数字，重跑 Extract。
+- **改了 merge/几何代码**：`uv run pytest`（秒级）；动了编码或几何，按 `docs/knowledge/verification.md` 重跑像素回归。
 
 ## 更多文档
 
-- [docs/knowledge/architecture.md](docs/knowledge/architecture.md) — 三条命令各自的内部流程
+- [docs/knowledge/architecture.md](docs/knowledge/architecture.md) — 各命令与网页的内部流程
 - [docs/knowledge/projection-contract.md](docs/knowledge/projection-contract.md) — 全景↔窗口投影的数学约定
 - [docs/knowledge/verification.md](docs/knowledge/verification.md) — 成品与基准逐像素比对的方法与记录
 - [CLAUDE.md](CLAUDE.md) — 开发规范（布局、硬性规则、提交约定）

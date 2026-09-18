@@ -1,0 +1,31 @@
+name = "Mono_dance_4k"
+notes = "created via web dashboard"
+
+[source]
+path = "../../sources/Mono_dance_4k.mp4"
+sha256 = "5f35eb54aaa6baf5e80c00b78369ae0791ae0113def90834d1781ea158c8f247"
+
+[erp]
+width = 8000
+height = 4000
+fps = 60.000
+
+[frames]
+start = 0
+end = 589
+
+[viewport]
+yaw_deg = -71.9
+pitch_deg = -7.9
+fov_h_deg = 59.0
+width = 1920
+height = 1080
+
+[inner]
+x = 480
+y = 270
+width = 960
+height = 540
+
+[ai_clip]
+path = 'E:\360AIGC\vrpatch\cases\Mono_dance_4k\derived\clip.mp4'

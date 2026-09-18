@@ -1,89 +1,316 @@
-"""Local web picker: starlette + jinja2, server-rendered, zero npm.
+"""vrpatch-serve backend: the single entry point for the whole workflow.
 
-Interaction model (frozen decision #2 + plan Phase 7):
-- clicking the ERP preview posts the picked yaw/pitch (server recomputes and
-  re-renders);
-- the inner rect is dragged on the viewport preview *client-side* (a plain
-  div overlay, no canvas), and only the release POSTs the final rect.
+One local web app covers everything that used to be CLI-only: create a case
+from a video in sources/, pick viewport/inner, run extract, register the
+external AI tool's output, run merge — with a single-lane task queue and live
+progress. `case.toml` stays the single source of truth and the CLIs stay the
+execution path (the web layer only writes case.toml and spawns `python -m
+vrpatch.cli...`), so command-line users and web users share one reality.
+
+Localhost, single user: the file browser is unrestricted on purpose.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
-import uvicorn
+import cv2
+import jinja2
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
-from ..case import load_case
-from . import render
+from ..case import load_case, set_ai_clip
 from .render import PreviewStore
+from .tasks import QUEUE
 
+_ROOT = Path(__file__).resolve().parents[3]  # src/vrpatch/web/app.py -> repo root
 _TEMPLATES = Path(__file__).parent / "templates"
-_STATIC = Path(__file__).parent / "static"
+_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi"}
+
+_env = jinja2.Environment(loader=jinja2.FileSystemLoader(_TEMPLATES),
+                          autoescape=True)
 
 
-def _store(request) -> PreviewStore:
-    return request.app.state.store
+def sources_dir() -> Path:
+    d = _ROOT / "sources"
+    d.mkdir(exist_ok=True)
+    return d
 
+
+def cases_dir() -> Path:
+    d = _ROOT / "cases"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def case_path(name: str) -> Path | None:
+    """Resolve a case name; refuse anything that escapes cases/."""
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return None
+    p = cases_dir() / name / "case.toml"
+    return p if p.is_file() else None
+
+
+# ---- per-case preview stores, invalidated on case.toml mtime change --------
+
+_stores: dict[str, tuple[float, PreviewStore]] = {}
+
+
+def get_store(name: str) -> PreviewStore | None:
+    cp = case_path(name)
+    if cp is None:
+        return None
+    mtime = cp.stat().st_mtime
+    hit = _stores.get(name)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    store = PreviewStore(str(cp))
+    _stores[name] = (mtime, store)
+    return store
+
+
+def preview_urls(name: str) -> dict:
+    store = get_store(name)
+    if store is None:
+        return {}
+    k = store.key
+    return {"erp": f"/img/{name}/erp.png?k={k}", "vp": f"/img/{name}/vp.png?k={k}"}
+
+
+# ---- pages -----------------------------------------------------------------
 
 async def index(request):
-    store = _store(request)
-    case = load_case(store.case_path, verify=False)
-    html = (_TEMPLATES / "index.html").read_text(encoding="utf-8")
-    vp = case.viewport
-    inner = case.inner
-    body = (
-        html.replace("__CASE__", case.name)
-            .replace("__ERP__", f"/img/{store.erp_png().name}?k={store.key}")
-            .replace("__VP__", f"/img/{store.viewport_png().name}?k={store.key}")
-            .replace("__YAW__", str(vp.yaw_deg)).replace("__PITCH__", str(vp.pitch_deg))
-            .replace("__FOV__", str(vp.fov_h_deg))
-            .replace("__IN__", f"{inner.x},{inner.y},{inner.width},{inner.height}")
-            .replace("__MSGS__", request.query_params.get("msg", ""))
-    )
-    return HTMLResponse(body)
+    tpl = _env.get_template("dashboard.html")
+    return HTMLResponse(tpl.render())
 
 
 async def img(request):
-    store = _store(request)
     name = request.path_params["name"]
-    p = store.dir / name
-    if not p.is_file() or p.parent != store.dir:
-        return HTMLResponse("not found", status_code=404)
+    fn = request.path_params["file"]
+    store = get_store(name)
+    if store is None or "/" in fn or "\\" in fn:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    # both previews are regenerated on demand under their content-key names
+    p = store.erp_png() if fn == "erp.png" else store.viewport_png()
     return FileResponse(p)
 
 
-async def pick_erp(request):
-    form = await request.form()
-    store = _store(request)
-    store.set_viewport_from_erp_click(float(form["fx"]), float(form["fy"]))
-    return RedirectResponse("/", 303)
+# ---- case api ----------------------------------------------------------
+
+def _case_info(name: str) -> dict | None:
+    cp = case_path(name)
+    if cp is None:
+        return None
+    c = load_case(cp, verify=False)
+    derived = cp.parent / "derived"
+    ai = c.ai_clip
+    return {
+        "name": name,
+        "frames": [c.frame_start, c.frame_end],
+        "fps": c.fps,
+        "erp": [c.erp_width, c.erp_height],
+        "viewport": {"yaw": c.viewport.yaw_deg, "pitch": c.viewport.pitch_deg,
+                     "fov": c.viewport.fov_h_deg,
+                     "size": [c.viewport.width, c.viewport.height]},
+        "inner": {"x": c.inner.x, "y": c.inner.y,
+                  "w": c.inner.width, "h": c.inner.height},
+        "extracted": (derived / "clip.mp4").is_file(),
+        "ai_clip": ai,
+        "ai_clip_exists": bool(ai) and Path(ai).is_file(),
+        "merged": any(derived.glob("out*.mp4")),
+        "derived": str(derived),
+        "previews": preview_urls(name),
+    }
 
 
-async def pick_inner(request):
-    form = await request.form()
-    store = _store(request)
-    # JS posts coords in preview pixels; scale back to viewport space
-    scale = min(render.VIEWPORT_PREVIEW_W / store.case.viewport.width, 1.0)
-    x, y, w, h = (int(float(v) / scale) for v in
-                  (form["x"], form["y"], form["w"], form["h"]))
-    if w > 0 and h > 0:
-        store.set_inner(x, y, w, h)
-    return RedirectResponse("/", 303)
+async def api_cases(request):
+    if request.method == "GET":
+        names = sorted(p.parent.name for p in cases_dir().glob("*/case.toml"))
+        return JSONResponse([_case_info(n) for n in names])
+
+    # POST: create a case from a video already inside sources/
+    body = await request.json()
+    video = sources_dir() / Path(body.get("video", "")).name
+    if not video.is_file():
+        return JSONResponse({"error": f"no such video in sources/: {video.name}"},
+                            status_code=400)
+    name = video.stem
+    cdir = cases_dir() / name
+    cdir.mkdir(parents=True, exist_ok=True)
+    cp = cdir / "case.toml"
+    if cp.exists():
+        return JSONResponse({"error": f"case '{name}' already exists"}, status_code=409)
+
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        return JSONResponse({"error": "cannot open video"}, status_code=400)
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+
+    vpw = min(1920, w)
+    vph = int(vpw * 9 / 16)
+    sha = hashlib.sha256(video.read_bytes()).hexdigest()
+    cp.write_text(
+        f'name = "{name}"\n'
+        f'notes = "created via web dashboard"\n\n'
+        f"[source]\n"
+        f'path = "../../sources/{video.name}"\n'
+        f'sha256 = "{sha}"\n\n'
+        f"[erp]\nwidth = {w}\nheight = {h}\nfps = {fps:.3f}\n\n"
+        f"[frames]\nstart = 0\nend = {max(0, n - 1)}\n\n"
+        f"[viewport]\nyaw_deg = 0.0\npitch_deg = 0.0\nfov_h_deg = 59.0\n"
+        f"width = {vpw}\nheight = {vph}\n\n"
+        f"[inner]\nx = {vpw // 4}\ny = {vph // 4}\n"
+        f"width = {vpw // 2}\nheight = {vph // 2}\n",
+        encoding="utf-8")
+    return JSONResponse(_case_info(name))
 
 
-def serve(case_file: str, port: int = 8760):
-    app = Starlette(routes=[
-        Route("/", index),
-        Route("/img/{name}", img),
-        Route("/pick/erp", pick_erp, methods=["POST"]),
-        Route("/pick/inner", pick_inner, methods=["POST"]),
-    ])
-    app.state.store = PreviewStore(case_file)
-    _STATIC.mkdir(exist_ok=True)
-    app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
-    print(f"vrpatch pick: http://127.0.0.1:{port}/  ({case_file})")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+async def api_case(request):
+    name = request.path_params["name"]
+    info = _case_info(name)
+    if info is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    return JSONResponse(info)
+
+
+async def api_viewport(request):
+    name = request.path_params["name"]
+    store = get_store(name)
+    if store is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    body = await request.json()
+    store.set_viewport_from_erp_click(float(body["fx"]), float(body["fy"]))
+    _stores[name] = (Path(store.case_path).stat().st_mtime, store)
+    return JSONResponse(_case_info(name))
+
+
+async def api_inner(request):
+    name = request.path_params["name"]
+    store = get_store(name)
+    if store is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    body = await request.json()
+    x, y, w, h = (int(body[k]) for k in ("x", "y", "w", "h"))
+    if w <= 0 or h <= 0:
+        return JSONResponse({"error": "width/height must be positive"}, status_code=400)
+    store.set_inner(x, y, w, h)
+    _stores[name] = (Path(store.case_path).stat().st_mtime, store)
+    return JSONResponse(_case_info(name))
+
+
+# ---- pipeline api --------------------------------------------------------
+
+async def api_extract(request):
+    name = request.path_params["name"]
+    cp = case_path(name)
+    if cp is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    argv = [sys_executable(), "-m", "vrpatch.cli.extract", "case", str(cp)]
+    task = QUEUE.submit("extract", name, argv)
+    return JSONResponse({"submitted": task.kind, "case": name})
+
+
+async def api_ai_clip(request):
+    name = request.path_params["name"]
+    cp = case_path(name)
+    if cp is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    body = await request.json()
+    p = Path(body.get("path", ""))
+    if not p.is_file():
+        return JSONResponse({"error": f"not a file: {p}"}, status_code=400)
+    set_ai_clip(cp, str(p))
+    _stores.pop(name, None)  # case.toml changed behind the store's back
+    return JSONResponse(_case_info(name))
+
+
+async def api_merge(request):
+    name = request.path_params["name"]
+    cp = case_path(name)
+    if cp is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    c = load_case(cp, verify=False)
+    if not c.ai_clip or not Path(c.ai_clip).is_file():
+        return JSONResponse({"error": "register the AI clip first"}, status_code=400)
+    derived = cp.parent / "derived"
+    if not (derived / "clip.json").is_file():
+        return JSONResponse({"error": "run extract first"}, status_code=400)
+    out = derived / "out.mp4"
+    argv = [sys_executable(), "-m", "vrpatch.cli.merge",
+            "--input", str((cp.parent / c.source.path).resolve()),
+            "--ai", c.ai_clip, "--sidecar", str(derived / "clip.json"),
+            "--output", str(out)]
+    QUEUE.submit("merge", name, argv)
+    return JSONResponse({"submitted": "merge", "case": name})
+
+
+async def api_task(request):
+    return JSONResponse(QUEUE.status())
+
+
+async def api_browse(request):
+    """Directory browser for picking the AI clip by path (localhost tool:
+    unrestricted by design; only video files are listed)."""
+    d = Path(request.query_params.get("path", str(_ROOT)))
+    if not d.is_dir():
+        return JSONResponse({"error": "not a directory"}, status_code=400)
+    dirs = sorted(p for p in d.iterdir() if p.is_dir() and not p.name.startswith("."))
+    files = sorted(p for p in d.iterdir()
+                   if p.is_file() and p.suffix.lower() in _VIDEO_EXTS)
+    return JSONResponse({
+        "path": str(d),
+        "parent": str(d.parent) if d.parent != d else None,
+        "dirs": [p.name for p in dirs[:200]],
+        "files": [str(p) for p in files[:200]],
+    })
+
+
+async def api_sources(request):
+    """Videos available for new cases (fixed library dir, frozen decision)."""
+    vids = sorted(p for p in sources_dir().iterdir()
+                  if p.is_file() and p.suffix.lower() in _VIDEO_EXTS)
+    return JSONResponse({"dir": str(sources_dir()),
+                         "files": [p.name for p in vids]})
+
+
+def sys_executable() -> str:
+    import sys
+    return sys.executable
+
+
+routes = [
+    Route("/", index),
+    Route("/img/{name}/{file}", img),
+    Route("/api/cases", api_cases, methods=["GET", "POST"]),
+    Route("/api/case/{name}", api_case),
+    Route("/api/case/{name}/viewport", api_viewport, methods=["POST"]),
+    Route("/api/case/{name}/inner", api_inner, methods=["POST"]),
+    Route("/api/case/{name}/extract", api_extract, methods=["POST"]),
+    Route("/api/case/{name}/ai-clip", api_ai_clip, methods=["POST"]),
+    Route("/api/case/{name}/merge", api_merge, methods=["POST"]),
+    Route("/api/task", api_task),
+    Route("/api/browse", api_browse),
+    Route("/api/sources", api_sources),
+]
+
+
+def build_app() -> Starlette:
+    app = Starlette(routes=routes)
+    app.mount("/static", StaticFiles(directory=str(_TEMPLATES.parent / "static")),
+              name="static")
+    return app
+
+
+def serve(case_file: str | None = None, port: int = 8760):
+    import uvicorn
+    print(f"vrpatch serve: http://127.0.0.1:{port}/")
+    print(f"  sources/: {sources_dir()}   cases/: {cases_dir()}")
+    uvicorn.run(build_app(), host="127.0.0.1", port=port, log_level="warning")

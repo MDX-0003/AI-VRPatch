@@ -17,14 +17,14 @@ start = 0
 end = 589
 
 [viewport]
-yaw_deg = -2.2
-pitch_deg = -7.4
+yaw_deg = 51.8
+pitch_deg = -25.4
 fov_h_deg = 59.0
 width = 1920
 height = 1080
 
 [inner]
-x = 142
-y = 112
-width = 1676
-height = 842
+x = 1294
+y = 30
+width = 596
+height = 918

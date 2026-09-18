@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>vrpatch 控制台</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #141414; color: #ddd; margin: 0.8rem; }
+  h1 { font-size: 1.05rem; margin: 0.2rem 0; }
+  h2 { font-size: 0.9rem; margin: 0.6rem 0 0.3rem; color: #9c9; }
+  .row { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+  .col { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 0.6rem; }
+  #caseList { min-width: 160px; }
+  .case { padding: 0.25rem 0.5rem; cursor: pointer; border-radius: 4px; }
+  .case:hover { background: #262626; }
+  .case.sel { background: #2d4a2d; }
+  .case .st { font-size: .72rem; color: #888; display: block; }
+  img { border: 1px solid #444; cursor: crosshair; display: block; }
+  #vpWrap { position: relative; display: inline-block; }
+  #innerBox { position: absolute; border: 2px dashed #f33; pointer-events: none; display: none; }
+  button { background: #2d4a2d; color: #ddd; border: 1px solid #4a4; border-radius: 4px;
+           padding: 0.3rem 0.7rem; cursor: pointer; margin: 0.15rem 0.1rem; }
+  button:disabled { background: #222; color: #666; border-color: #444; cursor: not-allowed; }
+  select, input { background: #222; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 0.25rem; }
+  .meta { font-size: .78rem; color: #9a9; }
+  pre { background: #111; border: 1px solid #333; padding: 0.4rem; font-size: .72rem;
+        max-height: 200px; overflow-y: auto; margin: 0.3rem 0; white-space: pre-wrap; }
+  .step { opacity: 0.35; } .step.on { opacity: 1; }
+  #browseBox { position: fixed; top: 10%; left: 30%; width: 40%; background: #1c1c1c;
+               border: 1px solid #4a4; border-radius: 6px; padding: 0.7rem; display: none; z-index: 9; }
+  .bitem { padding: 0.15rem 0.3rem; cursor: pointer; }
+  .bitem:hover { background: #262626; }
+  .ok { color: #7c7; } .bad { color: #c77; }
+</style>
+</head>
+<body>
+<h1>vrpatch 控制台</h1>
+<div class="row">
+  <div class="col" id="caseList">
+    <h2>① 案例</h2>
+    <div id="cases"></div>
+    <h2>新建案例（素材库）</h2>
+    <div class="meta" id="srcDir"></div>
+    <select id="srcSel" style="width:100%"></select>
+    <button onclick="createCase()">从该视频创建案例</button>
+  </div>
+
+  <div class="col" id="pickCol">
+    <h2>② 选区：<span id="caseName">（未选择案例）</span></h2>
+    <div class="meta">全景：点哪里，视口中心就在哪里</div>
+    <img id="erpImg" style="width:512px" onclick="erpClick(event)">
+    <div class="meta" id="vpMeta">yaw - pitch - fov -</div>
+    <div class="meta">视口：按住拖一个框圈住人物，松手保存</div>
+    <div id="vpWrap"><img id="vpImg" style="width:512px" draggable="false"><div id="innerBox"></div></div>
+    <div class="meta" id="inMeta">inner -</div>
+  </div>
+
+  <div class="col" id="pipeCol">
+    <h2>③ 流水线</h2>
+    <div class="step" id="stExtract"><button id="btnExtract" onclick="runExtract()">1 · Extract（抠视口）</button>
+      <span class="meta" id="exSt"></span></div>
+    <div class="step" id="stAi"><button onclick="openBrowse()">2 · 选入 AI 结果（ai_clip.mp4）</button>
+      <span class="meta" id="aiSt"></span>
+      <div class="meta">先把它交给外部 AI 工具重绘，产物存好后在这里指认路径</div></div>
+    <div class="step" id="stMerge"><button id="btnMerge" onclick="runMerge()">3 · Merge（贴回全景）</button>
+      <span class="meta" id="mgSt"></span></div>
+    <h2>任务</h2>
+    <pre id="taskBox">（空闲）</pre>
+    <div class="meta">每次运行同时写入 logs/ 下的同名日志</div>
+  </div>
+</div>
+
+<div id="browseBox">
+  <b>选择 AI 输出视频</b> <button style="float:right" onclick="closeBrowse()">×</button>
+  <div class="meta" id="bPath"></div>
+  <div id="bList" style="max-height:300px;overflow-y:auto"></div>
+</div>
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
