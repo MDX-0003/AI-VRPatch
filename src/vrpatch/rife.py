@@ -68,6 +68,11 @@ class RifeInterpolator:
         self.gpu = gpu
 
     def __call__(self, in_dir: Path, target_n: int, out_dir: Path) -> None:
+        # the exe picks directory mode only when BOTH paths already exist as
+        # directories; a not-yet-existing output makes it fall back to
+        # single-image mode and reject the path's extension
+        in_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
         cmd = [self.exe, "-i", str(in_dir), "-o", str(out_dir),
                "-n", str(target_n), "-m", self.model,
                "-f", "%08d.png"]

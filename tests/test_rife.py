@@ -40,3 +40,23 @@ def test_missing_env_hint_falls_through(tmp_path: Path):
 def test_nowhere_to_be_found(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(rife_mod.shutil, "which", lambda name: None)
     assert find_rife(root=tmp_path / "empty", env={}) is None
+
+
+def test_interpolator_precreates_output_dir(monkeypatch, tmp_path: Path):
+    """The exe only takes directory mode when the output dir already exists;
+    regression: a fresh -o path made it fall to single-image mode and reject
+    the extension."""
+    import subprocess as sp
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(rife_mod.subprocess, "run", fake_run)
+    ind, outd = tmp_path / "in", tmp_path / "out.not-an-image-ext"
+    ind.mkdir()
+    rife_mod.RifeInterpolator("exe")(ind, 10, outd)
+    assert outd.is_dir()  # created BEFORE the call, not after
+    assert str(outd) in seen["cmd"]
+    assert "-n" in seen["cmd"] and "10" in seen["cmd"]
