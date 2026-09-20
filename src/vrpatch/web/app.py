@@ -277,18 +277,21 @@ async def api_ai_clip(request):
 
 async def api_reset_draft(request):
     """"清空草稿": discard the draft region and restore the viewport/inner
-    recorded by the latest extract version. Only the preview and case.toml
-    draft change — extract artifacts are immutable and untouched."""
+    recorded by the SELECTED extract version (body {"version": ...}; defaults
+    to the latest). Only the preview and case.toml draft change — extract
+    artifacts are immutable and untouched."""
     name = request.path_params["name"]
     cp = case_path(name)
     if cp is None:
         return JSONResponse({"error": "no such case"}, status_code=404)
-    ev = extract_version(cp)
-    if not ev:
+    body = await request.json()
+    version = body.get("version") or extract_version(cp)
+    if not version:
         return JSONResponse({"error": "还没有任何 Extract 版本可回退"}, status_code=400)
-    sj = cp.parent / "extracts" / ev / "clip.json"
+    sj = cp.parent / "extracts" / version / "clip.json"
     if not sj.is_file():
-        return JSONResponse({"error": f"extract {ev} 缺少 clip.json"}, status_code=400)
+        return JSONResponse({"error": f"extract {version} 缺少 clip.json"},
+                            status_code=400)
     seg = json.loads(sj.read_text(encoding="utf-8"))["segments"][0]
     vp, inner = seg["viewport"], seg["inner"]
     set_draft_geometry(

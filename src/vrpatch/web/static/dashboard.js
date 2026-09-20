@@ -124,7 +124,8 @@ async function postGeometry(kind, body) {
 async function resetDraft() {
   if (!SEL) return;
   try {
-    await api(`/api/case/${SEL}/reset-draft`, {});
+    // reset target = the version chosen in the dropdown (default: latest)
+    await api(`/api/case/${SEL}/reset-draft`, { version: $("verSel").value });
     await refreshCase();
   } catch (e) { alert(e.message); }
 }
