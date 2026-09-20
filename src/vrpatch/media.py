@@ -2,7 +2,10 @@
 
 Everything here is lazy: nothing runs until a merge actually needs to encode.
 
-The encode parameters are byte-compatible with the project's verified baseline
+ffmpeg resolution order: the project's own ``bin/ffmpeg.exe`` first (ships
+with the distribution package, so recipients never touch PATH), then whatever
+is on PATH as a fallback. Pin the build used in bin/ (see docs/knowledge) —
+the encode parameters are byte-compatible with the project's verified baseline
 (see docs/knowledge/verification.md): rawvideo bgr24 stdin -> libx264
 crf/preset -> yuv420p, audio carried over in a second ``-c copy`` remux pass
 (remuxing a copied stream cannot change the frame count; encoding with the
@@ -14,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import numpy as np
 
@@ -21,13 +25,18 @@ _FFMPEG: str | None = None
 _RESOLVED = False
 
 
+def bundled_ffmpeg() -> Path:
+    """bin/ffmpeg.exe next to the project root (src/vrpatch/media.py -> root)."""
+    return Path(__file__).resolve().parents[2] / "bin" / "ffmpeg.exe"
+
+
 def ffmpeg_path() -> str | None:
-    """Locate an ffmpeg binary on first use; None if there is none."""
+    """Locate an ffmpeg binary on first use; bin/ wins over PATH."""
     global _FFMPEG, _RESOLVED
     if not _RESOLVED:
         _RESOLVED = True
-        found = shutil.which("ffmpeg")
-        _FFMPEG = found
+        bundled = bundled_ffmpeg()
+        _FFMPEG = str(bundled) if bundled.is_file() else shutil.which("ffmpeg")
     return _FFMPEG
 
 

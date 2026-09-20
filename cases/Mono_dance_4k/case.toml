@@ -14,12 +14,9 @@ fps = 60.000
 start = 0
 end = 589
 
-[extract]
-current = '20260920-143817'
-
 [viewport]
-yaw_deg = 63.8
-pitch_deg = -57.6
+yaw_deg = -84.6
+pitch_deg = 29.1
 fov_h_deg = 59.0
 width = 1920
 height = 1080
@@ -29,3 +26,6 @@ x = 535
 y = 148
 width = 1133
 height = 828
+
+[extract]
+current = '20260920-155151'
