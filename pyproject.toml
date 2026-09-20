@@ -24,6 +24,7 @@ dev = [
 [project.scripts]
 vrpatch-extract = "vrpatch.cli.extract:app"
 vrpatch-merge = "vrpatch.cli.merge:app"
+vrpatch-restore = "vrpatch.cli.restore:app"
 vrpatch-serve = "vrpatch.cli.serve:app"
 vrpatch-pick = "vrpatch.cli.pick:app"
 

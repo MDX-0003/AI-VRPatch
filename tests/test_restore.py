@@ -10,12 +10,17 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+from typer.testing import CliRunner
 
+from vrpatch.cli.restore import app as restore_cli
 from vrpatch.extract import write_clip
 from vrpatch.media import FfmpegSink
 from vrpatch.restore import (ClipInfo, FPS_TOL, aligned_is_current,
                              aligned_path_for, needs_restore, png_name,
-                             probe_clip, restore_clip, restore_plan)
+                             probe_clip, restore_clip, restore_plan,
+                             sidecar_target)
+from vrpatch.sidecar import (InnerRect, Segment, Sidecar, Viewport,
+                             save_sidecar)
 
 
 def make_clip(path: Path, n: int = 12, fps: float = 30.0, w: int = 64, h: int = 48):
@@ -226,3 +231,46 @@ def test_scratch_dirs_are_cleaned(clip: Path, tmp_path: Path):
     leftovers = [p.name for p in tmp_path.iterdir()
                  if p.name.endswith(".frames_in") or p.name.endswith(".frames_out")]
     assert leftovers == []
+
+
+# ---- sidecar target + CLI wiring ----------------------------------------------
+
+@pytest.fixture
+def sidecar_file(tmp_path: Path) -> Path:
+    sc = Sidecar(erp_width=1024, erp_height=512, fps=60.0, segments=[
+        Segment(id="seg_0", frame_start=0, frame_end=589,
+                viewport=Viewport(yaw_deg=0, pitch_deg=0, fov_h_deg=59,
+                                  width=1920, height=1080),
+                inner=InnerRect(x=10, y=10, width=100, height=100)),
+    ])
+    p = tmp_path / "clip.json"
+    save_sidecar(sc, p)
+    return p
+
+
+def test_sidecar_target_reads_segment_contract(sidecar_file: Path):
+    n, fps = sidecar_target(sidecar_file)
+    assert (n, fps) == (590, 60.0)
+
+
+def test_cli_no_op_when_target_matches(tmp_path: Path, sidecar_file: Path):
+    good = tmp_path / "good.mp4"
+    # the sidecar wants 590 frames; writing that many tiny frames is still fast
+    frames = np.zeros((590, 48, 64, 3), np.uint8)
+    write_clip(frames, str(good), 60.0)
+    r = CliRunner().invoke(restore_cli, ["--ai", str(good),
+                                         "--sidecar", str(sidecar_file), "-q"])
+    assert r.exit_code == 0, r.output
+    assert "nothing to do" in r.output
+    assert not aligned_path_for(good).exists()  # no artifact was produced
+
+
+def test_cli_clean_error_when_rife_missing_for_stretch(clip: Path,
+                                                       sidecar_file: Path,
+                                                       monkeypatch):
+    import vrpatch.cli.restore as cli_mod
+    monkeypatch.setattr(cli_mod, "find_rife", lambda: None)
+    r = CliRunner().invoke(restore_cli, ["--ai", str(clip),
+                                         "--sidecar", str(sidecar_file), "-q"])
+    assert r.exit_code != 0
+    assert "rife-ncnn-vulkan not found" in r.output
