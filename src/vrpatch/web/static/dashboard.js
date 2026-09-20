@@ -1,9 +1,9 @@
 // vrpatch dashboard: vanilla JS, polling only, zero npm.
-// All display and submitted coords derive from one mapping per image
-// (getBoundingClientRect), per the js-drag-overlay-coords rule.
+// ALL picking coordinates go through PickCoords (pick.js) — display and
+// submission share one mapping, so style changes cannot desync them.
 "use strict";
-let SEL = null;          // selected case name
-let drag = null;
+let SEL = null;                 // selected case name
+let vpDrag = null;              // PickCoords drag controller for the viewport
 
 const $ = (id) => document.getElementById(id);
 
@@ -57,12 +57,14 @@ async function createCase() {
 // ---- case detail -------------------------------------------------------
 
 async function selectCase(name) {
+  if (vpDrag) vpDrag.cancel();      // never leave a drag in flight across cases
   SEL = name;
   await refreshCase();
   await refreshCases();
 }
 
 async function refreshCase() {
+  if (!SEL || (vpDrag && vpDrag.active)) return;   // no image swaps mid-drag
   if (!SEL) return;
   const c = await api("/api/case/" + SEL);
   $("caseName").textContent = c.name;
@@ -77,21 +79,15 @@ async function refreshCase() {
   $("stAi").className = "step" + (c.extracted ? " on" : "");
   $("stMerge").className = "step" + (c.ai_clip_exists ? " on" : "");
   $("btnMerge").disabled = !c.ai_clip_exists;
+  $("innerBox").style.display = "none";            // committed: hide the live box
 }
 
+// ERP click: viewport centre follows the click, via the single mapping.
 async function erpClick(ev) {
   if (!SEL) return;
-  const r = ev.target.getBoundingClientRect();
-  await postGeometry("viewport", { fx: (ev.clientX - r.left) / r.width,
-                                   fy: (ev.clientY - r.top) / r.height });
-}
-
-// inner drag: display and submit share one pt() mapping
-function pt(ev) {
-  const img = $("vpImg"), r = img.getBoundingClientRect();
-  return { rx: ev.clientX - r.left, ry: ev.clientY - r.top,
-           x: (ev.clientX - r.left) / r.width * img.naturalWidth,
-           y: (ev.clientY - r.top) / r.height * img.naturalHeight };
+  const p = PickCoords.point($("erpImg"), ev);
+  if (!p) return;                    // preview not loaded yet: ignore click
+  await postGeometry("viewport", { fx: p.frac.x, fy: p.frac.y });
 }
 
 async function postGeometry(kind, body) {
@@ -101,33 +97,16 @@ async function postGeometry(kind, body) {
   } catch (e) { alert(e.message); }
 }
 
-$("vpImg").addEventListener("mousedown", (e) => {
-  if (!SEL) return;
-  drag = { a: pt(e) };
-  $("innerBox").style.display = "block";
-  e.preventDefault();
-});
-$("vpImg").addEventListener("mousemove", (e) => {
-  if (!drag) return;
-  const b = pt(e);
-  const s = $("innerBox");
-  s.style.left = Math.min(drag.a.rx, b.rx) + "px";
-  s.style.top = Math.min(drag.a.ry, b.ry) + "px";
-  s.style.width = Math.abs(b.rx - drag.a.rx) + "px";
-  s.style.height = Math.abs(b.ry - drag.a.ry) + "px";
-});
-window.addEventListener("mouseup", (e) => {
-  if (!drag) return;
-  const b = pt(e);
-  const w = Math.abs(b.x - drag.a.x), h = Math.abs(b.y - drag.a.y);
-  if (w > 2 && h > 2) {
-    postGeometry("inner", { x: Math.round(Math.min(drag.a.x, b.x)),
-                            y: Math.round(Math.min(drag.a.y, b.y)),
-                            w: Math.round(w), h: Math.round(h) });
-  } else {
-    $("innerBox").style.display = "none";
-  }
-  drag = null;
+// inner drag: display and submission are both PickCoords outputs.
+// Submission uses frac (0..1 of the preview) — resolution-independent, the
+// server converts to viewport pixels.
+vpDrag = PickCoords.drag($("vpImg"), {
+  onMove(rect) { PickCoords.drawOverlay($("innerBox"), $("vpImg"), rect.css); },
+  onCommit(rect) {
+    postGeometry("inner", {
+      fx: rect.frac.x, fy: rect.frac.y, fw: rect.frac.w, fh: rect.frac.h });
+  },
+  onCancel() { $("innerBox").style.display = "none"; },
 });
 
 // ---- pipeline ----------------------------------------------------------

@@ -42,6 +42,26 @@ uv run vrpatch-serve            # 启动控制台，浏览器打开 http://127.0
 `vrpatch-merge --input <全景> --ai <AI结果> --sidecar <clip.json> --output <成品>` 合并。
 每次 extract/merge 运行都会同时在 `logs/` 下写一份带时间戳的日志。
 
+每次新建案例，都会在E:\360AIGC\vrpatch\cases下新建文件夹，内容示范如下：
+
+```
+E:\360AIGC\vrpatch\
+├── sources\
+│   └── Mono_dance_4k.mp4        ← 源视频放这里（唯一要你手动放的东西）
+├── cases\
+│   └── Mono_dance_4k\           ← 新建案例生成的文件夹
+│       ├── case.toml            ← 全部配置（指向 ../../sources/ 里的源视频 + sha256）
+│       └── derived\             ← 这个案例的所有产物，越跑越多
+│           ├── clip.mp4         ← Extract：抠出的视口画面（交给 AI 的就是它）
+│           ├── clip.json        ← sidecar（对外契约，自动生成）
+│           ├── clip_mask.png    ← 内圈掩膜（和 clip.mp4 一起交给 AI）
+│           ├── pick\            ← 选区预览缓存（erp/vp 两张小图）
+│           └── out.mp4          ← Merge：最终成品
+└── logs\                        ← 注意：运行日志不进案例文件夹，统一在这（按命令+案例名+时间戳命名）
+```
+
+
+
 ## case.toml：一个任务的全部配置
 
 每个案例一个文件夹（`cases/<名字>/`），`case.toml` 记录全部配置，是唯一真源：

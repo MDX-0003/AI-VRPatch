@@ -198,7 +198,13 @@ async def api_inner(request):
     if store is None:
         return JSONResponse({"error": "no such case"}, status_code=404)
     body = await request.json()
-    x, y, w, h = (int(body[k]) for k in ("x", "y", "w", "h"))
+    # Contract: the client submits fractions (0..1) of the preview image —
+    # deliberately independent of preview resolution and CSS size, so neither
+    # end can drift when styles change. Convert to viewport pixels here.
+    fx, fy, fw, fh = (float(body[k]) for k in ("fx", "fy", "fw", "fh"))
+    vp = store.case.viewport
+    x, y = int(fx * vp.width), int(fy * vp.height)
+    w, h = int(fw * vp.width), int(fh * vp.height)
     if w <= 0 or h <= 0:
         return JSONResponse({"error": "width/height must be positive"}, status_code=400)
     store.set_inner(x, y, w, h)
