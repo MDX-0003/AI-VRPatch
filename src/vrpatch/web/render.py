@@ -69,6 +69,11 @@ class PreviewStore:
         return hashlib.sha1(
             f"{self.case.viewport}|{self.case.inner}".encode()).hexdigest()[:10]
 
+    def touch(self):
+        """Invalidate after a geometry mutation that bypassed set_viewport/
+        set_inner (e.g. the joystick nudge), so the next preview URL changes."""
+        self.key = self._new_key()
+
     # ---- previews (cheap: overlay on cached bases) ---------------------------
 
     def erp_png(self) -> Path:

@@ -325,6 +325,7 @@ async def api_nudge(request):
     vp.yaw_deg = round(yaw, 2)
     vp.pitch_deg = round(pitch, 2)
     store.save()
+    store.touch()  # previews must change: the geometry just moved
     _stores[name] = (Path(store.case_path).stat().st_mtime, store)
     return JSONResponse({"yaw": vp.yaw_deg, "pitch": vp.pitch_deg})
 
