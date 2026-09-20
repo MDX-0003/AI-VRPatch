@@ -142,6 +142,47 @@ vpDrag = PickCoords.drag($("vpImg"), {
   onCancel() { $("innerBox").style.display = "none"; },
 });
 
+// ---- joystick micro-offset ---------------------------------------------
+// Hold a direction: nudge every 100ms (0.1° per step). Server owns wrap/clamp;
+// meta text updates live from each response; previews refresh once on release.
+let joyTimer = null;
+
+async function nudgeOnce(dy, dp) {
+  if (!SEL) return null;
+  try {
+    return await api(`/api/case/${SEL}/nudge`, { dyaw: dy, dpitch: dp });
+  } catch { return null; }
+}
+
+function updateJoystickMeta(r) {
+  if (!r) return;
+  $("vpMeta").textContent =
+    `yaw ${r.yaw}  pitch ${r.pitch}  （预览松手后刷新）`;
+}
+
+document.querySelectorAll(".jb").forEach((btn) => {
+  const dy = parseFloat(btn.dataset.dy), dp = parseFloat(btn.dataset.dp);
+  const start = async (e) => {
+    if (!SEL || joyTimer) return;
+    e.preventDefault();
+    updateJoystickMeta(await nudgeOnce(dy, dp));
+    joyTimer = setInterval(async () => {
+      updateJoystickMeta(await nudgeOnce(dy, dp));
+    }, 100);
+  };
+  const stop = () => {
+    if (!joyTimer) return;
+    clearInterval(joyTimer);
+    joyTimer = null;
+    if (SEL) refreshCase();          // re-render previews once on release
+  };
+  btn.addEventListener("mousedown", start);
+  btn.addEventListener("mouseup", stop);
+  btn.addEventListener("mouseleave", stop);
+  btn.addEventListener("touchstart", start, { passive: false });
+  btn.addEventListener("touchend", stop);
+});
+
 // ---- pipeline ----------------------------------------------------------
 
 async function runExtract() {
@@ -171,7 +212,7 @@ async function pollTask() {
   for (const l of t.last) txt += `\n${l.state === "done" ? "✓" : "✗"} ${l.kind} · ${l.case}`;
   $("taskBox").textContent = txt;
   // a finished task may have produced new files → refresh pipeline badges
-  if (SEL && !t.current) refreshCase();
+  if (SEL && !t.current && !joyTimer) refreshCase();
 }
 
 // ---- AI clip path browser ----------------------------------------------

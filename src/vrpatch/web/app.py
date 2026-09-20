@@ -302,6 +302,33 @@ async def api_reset_draft(request):
     return JSONResponse(_case_info(name))
 
 
+async def api_nudge(request):
+    """Joystick micro-offset: add small deltas to the draft yaw/pitch.
+
+    The server owns the arithmetic so case.toml always holds legal values:
+    yaw wraps at ±180 (ERP longitude is cyclic), pitch clamps to ±89. Called
+    every ~100ms while the user holds a joystick button.
+    """
+    name = request.path_params["name"]
+    cp = case_path(name)
+    if cp is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    store = get_store(name)
+    if store is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    body = await request.json()
+    dy = float(body.get("dyaw", 0.0))
+    dp = float(body.get("dpitch", 0.0))
+    vp = store.case.viewport
+    yaw = ((vp.yaw_deg + dy + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+    pitch = max(-89.0, min(89.0, vp.pitch_deg + dp))
+    vp.yaw_deg = round(yaw, 2)
+    vp.pitch_deg = round(pitch, 2)
+    store.save()
+    _stores[name] = (Path(store.case_path).stat().st_mtime, store)
+    return JSONResponse({"yaw": vp.yaw_deg, "pitch": vp.pitch_deg})
+
+
 async def api_merge(request):
     """Merge one extract version: that directory's clip.json + its registered
     ai_clip. Which version to merge is a human choice in the dashboard."""
@@ -376,6 +403,7 @@ routes = [
     Route("/api/case/{name}", api_case),
     Route("/api/case/{name}/viewport", api_viewport, methods=["POST"]),
     Route("/api/case/{name}/inner", api_inner, methods=["POST"]),
+    Route("/api/case/{name}/nudge", api_nudge, methods=["POST"]),
     Route("/api/case/{name}/reset-draft", api_reset_draft, methods=["POST"]),
     Route("/api/case/{name}/extract", api_extract, methods=["POST"]),
     Route("/api/case/{name}/ai-clip", api_ai_clip, methods=["POST"]),
