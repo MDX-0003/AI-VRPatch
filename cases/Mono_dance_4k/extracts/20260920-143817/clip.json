@@ -1,0 +1,26 @@
+{
+  "erp_width": 8000,
+  "erp_height": 4000,
+  "fps": 60.0,
+  "segments": [
+    {
+      "id": "seg_0",
+      "frame_start": 0,
+      "frame_end": 589,
+      "viewport": {
+        "yaw_deg": -84.6,
+        "pitch_deg": 29.1,
+        "fov_h_deg": 59.0,
+        "width": 1920,
+        "height": 1080
+      },
+      "inner": {
+        "x": 535,
+        "y": 148,
+        "width": 1133,
+        "height": 828
+      }
+    }
+  ],
+  "version": 1
+}

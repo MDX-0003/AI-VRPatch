@@ -74,7 +74,8 @@ async function refreshCase() {
   $("inMeta").textContent = `inner ${c.inner.x},${c.inner.y},${c.inner.w},${c.inner.h}`;
   $("exSt").textContent = c.extracted ? "✓ 已生成 clip.mp4 + 掩膜" : "";
   const verSel = $("verSel");
-  verSel.innerHTML = "";
+  const keep = verSel.value;               // pollTask rebuilds this list every
+  verSel.innerHTML = "";                   // 1.2s — never lose the user's pick
   for (const v of [...c.versions].reverse()) {
     const o = document.createElement("option");
     o.value = v.version;
@@ -82,8 +83,10 @@ async function refreshCase() {
     o.textContent = `${v.version}（${ai}）`;
     verSel.appendChild(o);
   }
-  // keep the user's selection if the version still exists, else latest
-  if (![...verSel.options].some(o => o.value === verSel.value) && verSel.options.length)
+  // restore the selection if the version still exists, else default to latest
+  if ([...verSel.options].some(o => o.value === keep))
+    verSel.value = keep;
+  else if (verSel.options.length)
     verSel.value = c.versions[c.versions.length - 1].version;
   updatePipeline(c);
   $("innerBox").style.display = "none";            // committed: hide the live box

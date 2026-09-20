@@ -87,8 +87,24 @@ E:\360AIGC\vrpatch\
 ## 常用场景
 
 - **换素材**：丢进 `sources/`，网页上新建案例即可。
-- **微调选区**：网页上重新点/拖，或直接改 `case.toml` 数字，重跑 Extract。
+- **微调选区**：网页上重新点/拖，重跑 Extract。
 - **改了 merge/几何代码**：`uv run pytest`（秒级）；动了编码或几何，按 `docs/knowledge/verification.md` 重跑像素回归。
+
+## 杀掉已有进程
+
+```
+Get-NetTCPConnection -LocalPort 8760 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+```
+
+逐步执行：找到当前占据端口的进程，输出里找 `LISTENING` 那一行，最后一列的数字就是 PID，比如：
+
+```
+netstat -ano | findstr :8760
+//杀掉进程
+taskkill /PID 12345 /F
+```
+
+
 
 ## 更多文档
 

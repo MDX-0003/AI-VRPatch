@@ -15,18 +15,17 @@ start = 0
 end = 589
 
 [viewport]
-yaw_deg = -1.1
-pitch_deg = -8.6
+yaw_deg = -84.6
+pitch_deg = 29.1
 fov_h_deg = 59.0
 width = 1920
 height = 1080
 
 [inner]
-x = 524
-y = 155
-width = 927
-height = 851
+x = 359
+y = 58
+width = 1331
+height = 1019
 
 [extract]
-current = '20260920-141137'
-geometry_sha256 = '05c9aa49e2229871db5f255361dc269e19051cd09cedae36c8252bff03878977'
+current = '20260920-143817'
