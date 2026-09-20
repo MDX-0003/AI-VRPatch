@@ -360,9 +360,36 @@ routes = [
 
 def build_app() -> Starlette:
     app = Starlette(routes=routes)
+    app.add_middleware(NoStoreMiddleware)
     app.mount("/static", StaticFiles(directory=str(_TEMPLATES.parent / "static")),
               name="static")
     return app
+
+
+class NoStoreMiddleware:
+    """Cache-Control: no-store on everything.
+
+    A localhost single-user tool must never serve a stale UI: heuristic
+    browser caching of dashboard.js once made a fix look broken for a whole
+    session, and a cached old page referencing a since-deleted script blanked
+    the entire dashboard. Bandwidth is free here; staleness is not.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                headers.append((b"cache-control", b"no-store"))
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
 def serve(case_file: str | None = None, port: int = 8760):

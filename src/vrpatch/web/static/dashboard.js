@@ -102,7 +102,6 @@ async function updatePipeline(c) {
   $("stMerge").className = "step" + (v.ai_clip_exists ? " on" : "");
   $("btnMerge").disabled = !v.ai_clip_exists;
 }
-}
 
 // ERP click: viewport centre follows the click, via the single mapping.
 async function erpClick(ev) {
