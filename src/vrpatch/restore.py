@@ -156,16 +156,28 @@ def _decode_to_png_dir(video: str, out_dir: Path, log) -> int:
 
 def _encode_png_dir(in_dir: Path, n: int, fps: float, out_path: Path,
                     size: tuple[int, int], crf: int, preset: str, log) -> None:
-    """Stream PNGs into ffmpeg at exactly n frames @ fps; short input repeats
-    its last frame, overflow is trimmed (the count contract is not optional)."""
+    """Stream a PNG dir into ffmpeg at exactly n frames @ fps; short input
+    repeats its last frame, overflow is trimmed (the count contract is not
+    optional). Files are taken in sorted order — the rife exe emits 1-based
+    %08d.png names, our fakes 0-based; sorting is agnostic to both."""
     sink = FfmpegSink(str(out_path), size, fps, crf, preset)
+    files = sorted(in_dir.glob("*.png"))
+    if not files:
+        sink.close()
+        raise RuntimeError(f"no frames produced in {in_dir}")
+    if len(files) < n:
+        log.info(f"WARNING: interpolator returned {len(files)} of {n} frames; "
+                 f"repeating the last frame.")
+    elif len(files) > n:
+        log.info(f"interpolator returned {len(files)} frames; trimming to {n}.")
     last = None
     for i in range(n):
-        p = in_dir / png_name(i)
-        if p.is_file():
-            last = cv2.imread(str(p))
+        img = cv2.imread(str(files[i] if i < len(files) else files[-1]))
+        if img is not None:
+            last = img
         if last is None:
-            raise RuntimeError(f"no decodable frames in {in_dir}")
+            sink.close()
+            raise RuntimeError(f"undecodable frame in {in_dir}: {files[i]}")
         sink.write(last)
     sink.close()
     log.info(f"encoded {n} frames @ {fps:g}fps -> {out_path}")

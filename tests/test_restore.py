@@ -195,6 +195,26 @@ def test_select_path_fixes_fps_label_lie(tmp_path: Path):
     assert abs(got.fps - 60.0) <= FPS_TOL
 
 
+def rife_one_based_interpolator(in_dir: Path, target_n: int, out_dir: Path) -> None:
+    """The real exe numbers output PNGs from 1 (ffmpeg %08d convention)."""
+    srcs = sorted(in_dir.glob("*.png"))
+    m = len(srcs)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for k in range(target_n):
+        j = round(k * (m - 1) / (target_n - 1)) if target_n > 1 else 0
+        cv2.imwrite(str(out_dir / png_name(k + 1)), cv2.imread(str(srcs[j])))
+
+
+def test_stretch_tolerates_one_based_png_names(tmp_path: Path):
+    src = make_clip(tmp_path / "ai.mp4", n=8, fps=30.0)
+    out = tmp_path / "ai_aligned.mp4"
+    restore_clip(src, out, 20, 60.0, interpolator=rife_one_based_interpolator,
+                 log=Rec())
+    got = probe_clip(out)
+    assert got.frames == 20
+    assert abs(frame_level(out, 19) - 70) < 15
+
+
 def test_short_interpolator_output_is_padded(tmp_path: Path):
     clip = make_clip(tmp_path / "ai.mp4", n=8, fps=30.0)
     out = tmp_path / "ai_aligned.mp4"

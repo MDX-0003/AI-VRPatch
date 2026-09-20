@@ -8,6 +8,9 @@ debug_*.png
 *_f*.png
 pick-after.png
 
+# machine-local external binaries (rife-ncnn-vulkan release, ~400 MB)
+bin/
+
 # python
 __pycache__/
 .venv/
