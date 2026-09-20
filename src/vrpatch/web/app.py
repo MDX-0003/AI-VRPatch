@@ -23,7 +23,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
-from ..case import load_case, set_ai_clip
+from ..case import (load_case, set_ai_clip, extract_version, ai_clip_pairing)
 from .render import PreviewStore
 from .tasks import QUEUE
 
@@ -108,7 +108,9 @@ def _case_info(name: str) -> dict | None:
     c = load_case(cp, verify=False)
     derived = cp.parent / "derived"
     ai = c.ai_clip
-    return {
+    ev = extract_version(cp)
+    pairing = ai_clip_pairing(cp)
+    info = {
         "name": name,
         "frames": [c.frame_start, c.frame_end],
         "fps": c.fps,
@@ -125,6 +127,12 @@ def _case_info(name: str) -> dict | None:
         "derived": str(derived),
         "previews": preview_urls(name),
     }
+    if ev:
+        info["extract"] = {**ev, "dir": str(cp.parent / "extracts" / ev["version"])}
+    if pairing:
+        matched = (bool(ev) and pairing.get("geometry_sha256") == ev["geometry_sha256"])
+        info["pairing"] = {**pairing, "geometry_matches": matched}
+    return info
 
 
 async def api_cases(request):
@@ -233,7 +241,14 @@ async def api_ai_clip(request):
     p = Path(body.get("path", ""))
     if not p.is_file():
         return JSONResponse({"error": f"not a file: {p}"}, status_code=400)
-    set_ai_clip(cp, str(p))
+    # Pair with the recorded extract version: this ai_clip was redrawn from
+    # THAT geometry, and merge will use it regardless of later draft edits.
+    ev = extract_version(cp)
+    if ev is None:
+        return JSONResponse({"error": "run extract before registering an AI clip"},
+                            status_code=400)
+    set_ai_clip(cp, str(p), extract_version=ev["version"],
+                geometry_sha256=ev["geometry_sha256"])
     _stores.pop(name, None)  # case.toml changed behind the store's back
     return JSONResponse(_case_info(name))
 
@@ -244,16 +259,28 @@ async def api_merge(request):
     if cp is None:
         return JSONResponse({"error": "no such case"}, status_code=404)
     c = load_case(cp, verify=False)
-    if not c.ai_clip or not Path(c.ai_clip).is_file():
+    pairing = ai_clip_pairing(cp)
+    if not pairing or not Path(pairing["path"]).is_file():
         return JSONResponse({"error": "register the AI clip first"}, status_code=400)
-    derived = cp.parent / "derived"
-    if not (derived / "clip.json").is_file():
-        return JSONResponse({"error": "run extract first"}, status_code=400)
-    out = derived / "out.mp4"
+    ev = extract_version(cp)
+    if not ev:
+        return JSONResponse({"error": "no recorded extract"}, status_code=400)
+    if pairing["geometry_sha256"] != ev["geometry_sha256"]:
+        return JSONResponse(
+            {"error": "the registered AI clip belongs to an older extract; "
+                      "re-register it after extracting (or re-extract)"},
+            status_code=409)
+    vdir = cp.parent / "extracts" / ev["version"]
+    sidecar = vdir / "clip.json"
+    if not sidecar.is_file():
+        return JSONResponse({"error": f"extract version {ev['version']} is missing "
+                                      f"its clip.json"}, status_code=400)
+    out = cp.parent / "derived" / "out.mp4"
     argv = [sys_executable(), "-m", "vrpatch.cli.merge",
             "--input", str((cp.parent / c.source.path).resolve()),
-            "--ai", c.ai_clip, "--sidecar", str(derived / "clip.json"),
-            "--output", str(out)]
+            "--ai", pairing["path"], "--sidecar", str(sidecar),
+            "--output", str(out),
+            "--expect-geometry-sha256", pairing["geometry_sha256"]]
     QUEUE.submit("merge", name, argv)
     return JSONResponse({"submitted": "merge", "case": name})
 

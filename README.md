@@ -19,6 +19,8 @@
 
 中间第 ② 步必须由人完成（AI 工具是外部的），所以流水线断成两段。
 
+**选区是草稿，Extract 才定版**：网页上拖框、点选随时可改、可反悔，只影响预览；每次点 Extract 会把当时的区域固化成一个版本（`cases/<案例>/extracts/<时间戳>/`，含 clip.mp4 / clip.json / 掩膜）。导出后再怎么改选区，已导出的 clip 与其记录的区域都不会变。"选入 AI 结果"时把 AI 产物与某个 Extract 版本配对；Merge 严格按配对版本执行，几何指纹不一致会直接拒绝（CLI 可 `--force` 强制），不会把旧画面悄悄贴到新位置。
+
 ## 快速上手
 
 前提：装好 [uv](https://docs.astral.sh/uv/)、Python 3.11、ffmpeg（在 PATH 上）。

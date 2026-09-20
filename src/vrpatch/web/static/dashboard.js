@@ -73,12 +73,22 @@ async function refreshCase() {
   $("vpMeta").textContent = `yaw ${c.viewport.yaw}  pitch ${c.viewport.pitch}  fov ${c.viewport.fov}  窗口 ${c.viewport.size}`;
   $("inMeta").textContent = `inner ${c.inner.x},${c.inner.y},${c.inner.w},${c.inner.h}`;
   $("exSt").textContent = c.extracted ? "✓ 已生成 clip.mp4 + 掩膜" : "";
-  $("aiSt").textContent = c.ai_clip ? (c.ai_clip_exists ? "✓ " + c.ai_clip : "✗ 文件不存在：" + c.ai_clip) : "";
+  if (c.extract) $("exSt").textContent += ` · 版本 ${c.extract.version}`;
+  if (c.pairing) {
+    $("aiSt").textContent = c.pairing.geometry_matches
+      ? `✓ 已配对 Extract ${c.pairing.extract}（几何指纹一致）`
+      : `✗ 配对的是旧版本 Extract ${c.pairing.extract}，请重新 Extract 并重新选入`;
+    $("aiSt").className = c.pairing.geometry_matches ? "meta ok" : "meta bad";
+  } else {
+    $("aiSt").textContent = c.ai_clip ? c.ai_clip : "";
+    $("aiSt").className = "meta";
+  }
   $("mgSt").textContent = c.merged ? "✓ derived/ 下已有 out 产物" : "";
   $("stExtract").className = "step on";
   $("stAi").className = "step" + (c.extracted ? " on" : "");
   $("stMerge").className = "step" + (c.ai_clip_exists ? " on" : "");
-  $("btnMerge").disabled = !c.ai_clip_exists;
+  const paired = !c.pairing || c.pairing.geometry_matches;
+  $("btnMerge").disabled = !c.ai_clip_exists || !paired;
   $("innerBox").style.display = "none";            // committed: hide the live box
 }
 

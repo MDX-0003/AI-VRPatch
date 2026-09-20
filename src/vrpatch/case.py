@@ -78,19 +78,67 @@ def load_case(path: str | Path, *, verify: bool = True) -> Case:
     return case
 
 
-def set_ai_clip(case_path: str | Path, ai_path: str) -> None:
-    """Record (or clear with None) the external tool's output path in the
-    optional [ai_clip] section, textual and section-scoped like the other
-    case.toml writers."""
+def set_ai_clip(case_path: str | Path, ai_path: str, *,
+                extract_version: str | None = None,
+                geometry_sha256: str | None = None) -> None:
+    """Record the external tool's output and — crucially — which extract
+    version it was redrawn from (frozen workflow decision: picking edits are
+    drafts; only an Extract run records geometry, and merge must use the
+    paired version, never the current draft). Clear with ai_path=""."""
+    kv = {}
+    if ai_path:
+        kv["path"] = ai_path
+        if extract_version:
+            kv["extract"] = extract_version
+        if geometry_sha256:
+            kv["geometry_sha256"] = geometry_sha256
+    _set_section(case_path, "ai_clip", kv)
+
+
+def set_extract_version(case_path: str | Path, version: str,
+                        geometry_sha256: str) -> None:
+    """Record the latest extract version ([extract] current) and its geometry
+    fingerprint. Written by the extract CLI; the version directory
+    extracts/<version>/ is immutable history."""
+    _set_section(case_path, "extract",
+                 {"current": version, "geometry_sha256": geometry_sha256})
+
+
+def extract_version(case_path: str | Path) -> dict | None:
+    """The recorded (latest) extract: {"version", "geometry_sha256"} or None."""
+    p = Path(case_path)
+    with open(p, "rb") as f:
+        d = tomllib.load(f)
+    e = d.get("extract", {})
+    if not e.get("current"):
+        return None
+    return {"version": e["current"],
+            "geometry_sha256": e.get("geometry_sha256", "")}
+
+
+def ai_clip_pairing(case_path: str | Path) -> dict | None:
+    """The registered ai_clip: {"path", "extract", "geometry_sha256"} or None."""
+    p = Path(case_path)
+    with open(p, "rb") as f:
+        d = tomllib.load(f)
+    a = d.get("ai_clip", {})
+    if not a.get("path"):
+        return None
+    return {"path": a["path"], "extract": a.get("extract", ""),
+            "geometry_sha256": a.get("geometry_sha256", "")}
+
+
+def _set_section(case_path: str | Path, section: str, kv: dict) -> None:
+    """Replace the `[section]` table with the given keys (textual, keeps the
+    rest of the file byte-stable). Windows paths are written as TOML literal
+    strings — single quotes — so backslashes need no escaping."""
     p = Path(case_path)
     text = p.read_text(encoding="utf-8")
-    # TOML literal string (single quotes): backslashes need no escaping, which
-    # is what Windows paths want.
-    section = f"[ai_clip]\npath = '{ai_path}'\n"
-    if "[ai_clip]" in text:
+    header = f"[{section}]"
+    if header in text:
         lines, in_sec = [], False
         for line in text.splitlines():
-            if line.strip() == "[ai_clip]":
+            if line.strip() == header:
                 in_sec = True
                 continue  # drop the old section header along with its keys
             if in_sec and line.strip().startswith("[") and line.strip().endswith("]"):
@@ -98,8 +146,11 @@ def set_ai_clip(case_path: str | Path, ai_path: str) -> None:
             if not in_sec:
                 lines.append(line)
         text = "\n".join(lines) + "\n"
-    if ai_path:
-        text = text.rstrip("\n") + "\n\n" + section
+    if kv:
+        body = "\n".join(
+            f"{k} = '{v}'" if isinstance(v, str) else f"{k} = {v}"
+            for k, v in kv.items())
+        text = text.rstrip("\n") + "\n\n" + header + "\n" + body + "\n"
     p.write_text(text, encoding="utf-8")
 
 

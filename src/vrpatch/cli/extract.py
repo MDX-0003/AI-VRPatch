@@ -12,18 +12,29 @@ Every run mirrors its console output to logs/<name>_<timestamp>.log.
 
 from __future__ import annotations
 
+import shutil
+import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 import typer
 
-from ..case import Case, load_case
+from ..case import Case, load_case, set_extract_version
 from ..sidecar import Sidecar, Segment, Viewport, InnerRect, save_sidecar
 from ..extract import extract_viewport_frame, open_writer, make_mask_image
 from ..progress import Log, RateMeter, open_log_file
 
 app = typer.Typer(add_completion=False, help=__doc__)
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _stream_extract(cap, fps, seg: Segment, clip_path: Path, sidecar_path: Path,
@@ -78,10 +89,23 @@ def from_case(
                       inner=case.inner)
         if not cap.set(cv2.CAP_PROP_POS_FRAMES, case.frame_start):
             log.info("WARNING: could not seek; decoding from the start instead.")
-        _stream_extract(cap, fps, seg, out / "clip.mp4", out / "clip.json",
-                        out / "clip_mask.png",
+        # Versioned snapshot (workflow decision: picking is a draft; extract
+        # records). Immutable per run; derived/ mirrors the latest version so
+        # plain `vrpatch-merge ... --sidecar derived/clip.json` keeps working.
+        version = time.strftime("%Y%m%d-%H%M%S")
+        vdir = case_file.parent / "extracts" / version
+        vdir.mkdir(parents=True, exist_ok=True)
+        _stream_extract(cap, fps, seg, vdir / "clip.mp4", vdir / "clip.json",
+                        vdir / "clip_mask.png",
                         (case.erp_width, case.erp_height), log)
         cap.release()
+        geometry_sha = _sha256_file(vdir / "clip.json")
+        set_extract_version(case_file, version, geometry_sha)
+        derived = case_file.parent / "derived"
+        derived.mkdir(parents=True, exist_ok=True)
+        for f in ("clip.mp4", "clip.json", "clip_mask.png"):
+            shutil.copyfile(vdir / f, derived / f)
+        log.phase(f"extract version: {version} (geometry sha {geometry_sha[:12]}…)")
         log.phase(f"log -> {log_path}")
     finally:
         fh.close()

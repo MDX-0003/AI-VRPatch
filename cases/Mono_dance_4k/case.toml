@@ -22,10 +22,10 @@ width = 1920
 height = 1080
 
 [inner]
-x = 524
-y = 20
-width = 221
-height = 396
+x = 194
+y = 140
+width = 1690
+height = 903
 
 [ai_clip]
-path = 'E:\360AIGC\vrpatch\cases\Mono_dance_4k\derived\clip.mp4'
+path = 'E:\360AIGC\vrpatch\cases\Mono_dance_4k\AIGC_60fps.mp4'
