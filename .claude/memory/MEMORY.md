@@ -4,3 +4,4 @@
 - [拖拽 overlay 坐标铁律](js-drag-overlay-coords.md) — clientX 必须经 getBoundingClientRect 换算，禁与 offsetLeft 混算
 - [网页控制台架构](web-dashboard-architecture.md) — subprocess 跑 CLI、单任务队列、TOML 路径坑
 - [Extract 版本与配对](extract-version-pairing.md) — 选区是草稿、Extract 定版；merge 按配对指纹执行
+- [case.toml vs clip.json](case-toml-vs-clip-json.md) — 草稿真源 vs 定版契约；合成各取哪个；选入 AI 时检查什么

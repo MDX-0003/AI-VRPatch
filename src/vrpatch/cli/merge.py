@@ -96,12 +96,6 @@ def merge(
     crf: int = typer.Option(18, help="x264 crf"),
     preset: str = typer.Option("medium", help="x264 preset"),
     report: Path = typer.Option(None, help="write a JSON run report here"),
-    expect_geometry_sha256: str = typer.Option(None,
-                                               help="fail unless the sidecar's "
-                                                    "sha256 matches (AI-clip "
-                                                    "pairing guard)"),
-    force: bool = typer.Option(False, help="proceed even if the geometry "
-                                           "fingerprint mismatches"),
     no_restore: bool = typer.Option(False, help="feed the raw AI clip to the "
                                                 "resampler even when it misses "
                                                 "the segment contract "
@@ -113,20 +107,6 @@ def merge(
     fh, log_path = open_log_file(f"merge_{output.stem}")
     log = Log(every=progress_every, quiet=quiet, fh=fh)
     typer.echo(f"log -> {log_path}")
-
-    # ---- 0. pairing guard ----------------------------------------------------
-    if expect_geometry_sha256:
-        import hashlib
-        h = hashlib.sha256()
-        with open(sidecar, "rb") as sf:
-            for chunk in iter(lambda: sf.read(1 << 20), b""):
-                h.update(chunk)
-        actual = h.hexdigest()
-        if actual != expect_geometry_sha256 and not force:
-            raise typer.Exit(
-                f"geometry fingerprint mismatch: the registered AI clip was "
-                f"drawn from a different extract than {sidecar}. Re-extract "
-                f"and re-register, or pass --force to override.")
 
     # ---- 1. sidecar (single segment, loud) -----------------------------------
     log.phase(f"sidecar: {sidecar}")

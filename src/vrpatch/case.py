@@ -81,51 +81,26 @@ def load_case(path: str | Path, *, verify: bool = True) -> Case:
 def set_ai_clip(case_path: str | Path, ai_path: str, *,
                 extract_version: str | None = None,
                 geometry_sha256: str | None = None) -> None:
-    """Record the external tool's output and — crucially — which extract
-    version it was redrawn from (frozen workflow decision: picking edits are
-    drafts; only an Extract run records geometry, and merge must use the
-    paired version, never the current draft). Clear with ai_path=""."""
-    kv = {}
-    if ai_path:
-        kv["path"] = ai_path
-        if extract_version:
-            kv["extract"] = extract_version
-        if geometry_sha256:
-            kv["geometry_sha256"] = geometry_sha256
+    """Deprecated global ai_clip registration (kept for case.toml readability
+    by older tooling); the per-version marker (ai_clip.json inside the extract
+    directory) is what merge uses now."""
+    kv = {"path": ai_path} if ai_path else {}
     _set_section(case_path, "ai_clip", kv)
 
 
-def set_extract_version(case_path: str | Path, version: str,
-                        geometry_sha256: str) -> None:
-    """Record the latest extract version ([extract] current) and its geometry
-    fingerprint. Written by the extract CLI; the version directory
-    extracts/<version>/ is immutable history."""
-    _set_section(case_path, "extract",
-                 {"current": version, "geometry_sha256": geometry_sha256})
+def set_extract_version(case_path: str | Path, version: str) -> None:
+    """Record the latest extract version ([extract] current). Written by the
+    extract CLI; the version directory extracts/<version>/ is the immutable
+    unit (clip + sidecar + mask + optional ai_clip.json marker)."""
+    _set_section(case_path, "extract", {"current": version})
 
 
-def extract_version(case_path: str | Path) -> dict | None:
-    """The recorded (latest) extract: {"version", "geometry_sha256"} or None."""
+def extract_version(case_path: str | Path) -> str | None:
+    """The latest recorded extract version, or None."""
     p = Path(case_path)
     with open(p, "rb") as f:
         d = tomllib.load(f)
-    e = d.get("extract", {})
-    if not e.get("current"):
-        return None
-    return {"version": e["current"],
-            "geometry_sha256": e.get("geometry_sha256", "")}
-
-
-def ai_clip_pairing(case_path: str | Path) -> dict | None:
-    """The registered ai_clip: {"path", "extract", "geometry_sha256"} or None."""
-    p = Path(case_path)
-    with open(p, "rb") as f:
-        d = tomllib.load(f)
-    a = d.get("ai_clip", {})
-    if not a.get("path"):
-        return None
-    return {"path": a["path"], "extract": a.get("extract", ""),
-            "geometry_sha256": a.get("geometry_sha256", "")}
+    return d.get("extract", {}).get("current")
 
 
 def _set_section(case_path: str | Path, section: str, kv: dict) -> None:

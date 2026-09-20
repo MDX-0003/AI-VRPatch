@@ -73,23 +73,35 @@ async function refreshCase() {
   $("vpMeta").textContent = `yaw ${c.viewport.yaw}  pitch ${c.viewport.pitch}  fov ${c.viewport.fov}  窗口 ${c.viewport.size}`;
   $("inMeta").textContent = `inner ${c.inner.x},${c.inner.y},${c.inner.w},${c.inner.h}`;
   $("exSt").textContent = c.extracted ? "✓ 已生成 clip.mp4 + 掩膜" : "";
-  if (c.extract) $("exSt").textContent += ` · 版本 ${c.extract.version}`;
-  if (c.pairing) {
-    $("aiSt").textContent = c.pairing.geometry_matches
-      ? `✓ 已配对 Extract ${c.pairing.extract}（几何指纹一致）`
-      : `✗ 配对的是旧版本 Extract ${c.pairing.extract}，请重新 Extract 并重新选入`;
-    $("aiSt").className = c.pairing.geometry_matches ? "meta ok" : "meta bad";
-  } else {
-    $("aiSt").textContent = c.ai_clip ? c.ai_clip : "";
-    $("aiSt").className = "meta";
+  const verSel = $("verSel");
+  verSel.innerHTML = "";
+  for (const v of [...c.versions].reverse()) {
+    const o = document.createElement("option");
+    o.value = v.version;
+    const ai = v.ai_clip_exists ? "✓AI" : "无AI";
+    o.textContent = `${v.version}（${ai}）`;
+    verSel.appendChild(o);
   }
-  $("mgSt").textContent = c.merged ? "✓ derived/ 下已有 out 产物" : "";
-  $("stExtract").className = "step on";
-  $("stAi").className = "step" + (c.extracted ? " on" : "");
-  $("stMerge").className = "step" + (c.ai_clip_exists ? " on" : "");
-  const paired = !c.pairing || c.pairing.geometry_matches;
-  $("btnMerge").disabled = !c.ai_clip_exists || !paired;
+  // keep the user's selection if the version still exists, else latest
+  if (![...verSel.options].some(o => o.value === verSel.value) && verSel.options.length)
+    verSel.value = c.versions[c.versions.length - 1].version;
+  updatePipeline(c);
   $("innerBox").style.display = "none";            // committed: hide the live box
+}
+
+// pipeline badges reflect the SELECTED extract version
+async function updatePipeline(c) {
+  if (!c) c = await api("/api/case/" + SEL);
+  const v = c.versions.find(v => v.version === $("verSel").value) || c.versions[c.versions.length - 1];
+  if (!v) { $("stExtract").className = "step"; $("stAi").className = "step"; $("stMerge").className = "step"; return; }
+  $("exSt").textContent = v.extracted ? "✓ 该版本已生成 clip.mp4 + 掩膜" : "";
+  $("aiSt").textContent = v.ai_clip ? (v.ai_clip_exists ? "✓ " + v.ai_clip : "✗ 文件不存在：" + v.ai_clip) : "";
+  $("aiSt").className = "meta";
+  $("stExtract").className = "step on";
+  $("stAi").className = "step" + (v.extracted ? " on" : "");
+  $("stMerge").className = "step" + (v.ai_clip_exists ? " on" : "");
+  $("btnMerge").disabled = !v.ai_clip_exists;
+}
 }
 
 // ERP click: viewport centre follows the click, via the single mapping.
@@ -130,7 +142,7 @@ async function runExtract() {
 async function runMerge() {
   if (!SEL) return;
   try {
-    await api(`/api/case/${SEL}/merge`, {});
+    await api(`/api/case/${SEL}/merge`, { version: $("verSel").value });
     pollTask();
   } catch (e) { alert(e.message); }
 }
@@ -184,7 +196,7 @@ async function browseDir(path) {
     const d = document.createElement("div");
     d.className = "bitem"; d.textContent = "🎬 " + f;
     d.onclick = async () => {
-      await api(`/api/case/${SEL}/ai-clip`, { path: f });
+      await api(`/api/case/${SEL}/ai-clip`, { path: f, version: $("verSel").value });
       closeBrowse();
       await refreshCase();
     };

@@ -56,14 +56,16 @@
   </div>
 
   <div class="col" id="pipeCol">
-    <h2>③ 流水线</h2>
-    <div class="step" id="stExtract"><button id="btnExtract" onclick="runExtract()">1 · Extract（抠视口）</button>
+    <h2>③ 流水线（操作对象：Extract 版本）</h2>
+    <div class="meta">版本：<select id="verSel" onchange="updatePipeline()"></select></div>
+    <div class="step" id="stExtract"><button id="btnExtract" onclick="runExtract()">1 · Extract（新建版本）</button>
       <span class="meta" id="exSt"></span></div>
-    <div class="step" id="stAi"><button onclick="openBrowse()">2 · 选入 AI 结果（ai_clip.mp4）</button>
+    <div class="step" id="stAi"><button onclick="openBrowse()">2 · 为该版本选入 AI 结果</button>
       <span class="meta" id="aiSt"></span>
       <div class="meta">先把它交给外部 AI 工具重绘，产物存好后在这里指认路径</div></div>
-    <div class="step" id="stMerge"><button id="btnMerge" onclick="runMerge()">3 · Merge（贴回全景）</button>
-      <span class="meta" id="mgSt"></span></div>
+    <div class="step" id="stMerge"><button id="btnMerge" onclick="runMerge()">3 · Merge（按该版本合并）</button>
+      <span class="meta" id="mgSt"></span>
+      <div class="meta">成品：derived/out_&lt;版本&gt;.mp4；每个版本可反复合并</div></div>
     <h2>任务</h2>
     <pre id="taskBox">（空闲）</pre>
     <div class="meta">每次运行同时写入 logs/ 下的同名日志</div>
@@ -75,7 +77,7 @@
   <div class="meta" id="bPath"></div>
   <div id="bList" style="max-height:300px;overflow-y:auto"></div>
 </div>
-<script src="/static/pick.js?v=5"></script>
-<script src="/static/dashboard.js?v=5"></script>
+<script src="/static/pick.js?v=6"></script>
+<script src="/static/dashboard.js?v=6"></script>
 </body>
 </html>

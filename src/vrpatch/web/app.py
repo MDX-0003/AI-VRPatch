@@ -23,7 +23,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
-from ..case import (load_case, set_ai_clip, extract_version, ai_clip_pairing)
+from ..case import load_case
 from .render import PreviewStore
 from .tasks import QUEUE
 
@@ -101,15 +101,42 @@ async def img(request):
 
 # ---- case api ----------------------------------------------------------
 
+def _versions(case_dir: Path) -> list[dict]:
+    """Extract version dirs, oldest last. Each dir is the self-contained unit:
+    clip + sidecar + mask + optional ai_clip.json marker ({"path": ...}) that
+    says which AI output belongs to this version. Location implies pairing —
+    no fingerprints."""
+    out = []
+    vroot = case_dir / "extracts"
+    if not vroot.is_dir():
+        return out
+    for vdir in sorted(p for p in vroot.iterdir() if p.is_dir()):
+        clip_json = vdir / "clip.json"
+        marker = vdir / "ai_clip.json"
+        ai_path = None
+        if marker.is_file():
+            try:
+                ai_path = json.loads(marker.read_text(encoding="utf-8")).get("path")
+            except (json.JSONDecodeError, OSError):
+                pass
+        out.append({
+            "version": vdir.name,
+            "dir": str(vdir),
+            "extracted": clip_json.is_file(),
+            "ai_clip": ai_path,
+            "ai_clip_exists": bool(ai_path) and Path(ai_path).is_file(),
+        })
+    return out
+
+
 def _case_info(name: str) -> dict | None:
     cp = case_path(name)
     if cp is None:
         return None
     c = load_case(cp, verify=False)
     derived = cp.parent / "derived"
-    ai = c.ai_clip
-    ev = extract_version(cp)
-    pairing = ai_clip_pairing(cp)
+    versions = _versions(cp.parent)
+    latest = versions[-1] if versions else None
     info = {
         "name": name,
         "frames": [c.frame_start, c.frame_end],
@@ -121,17 +148,11 @@ def _case_info(name: str) -> dict | None:
         "inner": {"x": c.inner.x, "y": c.inner.y,
                   "w": c.inner.width, "h": c.inner.height},
         "extracted": (derived / "clip.mp4").is_file(),
-        "ai_clip": ai,
-        "ai_clip_exists": bool(ai) and Path(ai).is_file(),
-        "merged": any(derived.glob("out*.mp4")),
+        "extract_version": latest["version"] if latest else None,
+        "versions": versions,
         "derived": str(derived),
         "previews": preview_urls(name),
     }
-    if ev:
-        info["extract"] = {**ev, "dir": str(cp.parent / "extracts" / ev["version"])}
-    if pairing:
-        matched = (bool(ev) and pairing.get("geometry_sha256") == ev["geometry_sha256"])
-        info["pairing"] = {**pairing, "geometry_matches": matched}
     return info
 
 
@@ -233,56 +254,58 @@ async def api_extract(request):
 
 
 async def api_ai_clip(request):
+    """Register an AI output for one extract version: writes the marker
+    ai_clip.json into that version's directory. Location implies pairing."""
     name = request.path_params["name"]
     cp = case_path(name)
     if cp is None:
         return JSONResponse({"error": "no such case"}, status_code=404)
     body = await request.json()
     p = Path(body.get("path", ""))
+    version = body.get("version")
     if not p.is_file():
         return JSONResponse({"error": f"not a file: {p}"}, status_code=400)
-    # Pair with the recorded extract version: this ai_clip was redrawn from
-    # THAT geometry, and merge will use it regardless of later draft edits.
-    ev = extract_version(cp)
-    if ev is None:
-        return JSONResponse({"error": "run extract before registering an AI clip"},
-                            status_code=400)
-    set_ai_clip(cp, str(p), extract_version=ev["version"],
-                geometry_sha256=ev["geometry_sha256"])
+    vdir = cp.parent / "extracts" / (version or "")
+    if not (vdir / "clip.json").is_file():
+        return JSONResponse({"error": f"unknown extract version: {version}"},
+                            status_code=404)
+    (vdir / "ai_clip.json").write_text(
+        json.dumps({"path": str(p)}, indent=2), encoding="utf-8")
     _stores.pop(name, None)  # case.toml changed behind the store's back
     return JSONResponse(_case_info(name))
 
 
 async def api_merge(request):
+    """Merge one extract version: that directory's clip.json + its registered
+    ai_clip. Which version to merge is a human choice in the dashboard."""
     name = request.path_params["name"]
     cp = case_path(name)
     if cp is None:
         return JSONResponse({"error": "no such case"}, status_code=404)
     c = load_case(cp, verify=False)
-    pairing = ai_clip_pairing(cp)
-    if not pairing or not Path(pairing["path"]).is_file():
-        return JSONResponse({"error": "register the AI clip first"}, status_code=400)
-    ev = extract_version(cp)
-    if not ev:
-        return JSONResponse({"error": "no recorded extract"}, status_code=400)
-    if pairing["geometry_sha256"] != ev["geometry_sha256"]:
-        return JSONResponse(
-            {"error": "the registered AI clip belongs to an older extract; "
-                      "re-register it after extracting (or re-extract)"},
-            status_code=409)
-    vdir = cp.parent / "extracts" / ev["version"]
-    sidecar = vdir / "clip.json"
-    if not sidecar.is_file():
-        return JSONResponse({"error": f"extract version {ev['version']} is missing "
-                                      f"its clip.json"}, status_code=400)
-    out = cp.parent / "derived" / "out.mp4"
+    body = await request.json()
+    versions = _versions(cp.parent)
+    if not versions:
+        return JSONResponse({"error": "run extract first"}, status_code=400)
+    version = body.get("version") or versions[-1]["version"]
+    ver = next((v for v in versions if v["version"] == version), None)
+    if ver is None:
+        return JSONResponse({"error": f"unknown extract version: {version}"},
+                            status_code=404)
+    if not ver["extracted"]:
+        return JSONResponse({"error": f"extract {version} has no clip.json"},
+                            status_code=400)
+    if not ver["ai_clip_exists"]:
+        return JSONResponse({"error": f"extract {version} has no AI clip "
+                                      f"registered"}, status_code=400)
+    vdir = cp.parent / "extracts" / version
+    out = cp.parent / "derived" / f"out_{version}.mp4"
     argv = [sys_executable(), "-m", "vrpatch.cli.merge",
             "--input", str((cp.parent / c.source.path).resolve()),
-            "--ai", pairing["path"], "--sidecar", str(sidecar),
-            "--output", str(out),
-            "--expect-geometry-sha256", pairing["geometry_sha256"]]
+            "--ai", ver["ai_clip"], "--sidecar", str(vdir / "clip.json"),
+            "--output", str(out)]
     QUEUE.submit("merge", name, argv)
-    return JSONResponse({"submitted": "merge", "case": name})
+    return JSONResponse({"submitted": "merge", "case": name, "version": version})
 
 
 async def api_task(request):

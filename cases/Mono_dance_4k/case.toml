@@ -15,17 +15,18 @@ start = 0
 end = 589
 
 [viewport]
-yaw_deg = -41.1
-pitch_deg = 24.2
+yaw_deg = -1.1
+pitch_deg = -8.6
 fov_h_deg = 59.0
 width = 1920
 height = 1080
 
 [inner]
-x = 194
-y = 140
-width = 1690
-height = 903
+x = 524
+y = 155
+width = 927
+height = 851
 
-[ai_clip]
-path = 'E:\360AIGC\vrpatch\cases\Mono_dance_4k\AIGC_60fps.mp4'
+[extract]
+current = '20260920-141137'
+geometry_sha256 = '05c9aa49e2229871db5f255361dc269e19051cd09cedae36c8252bff03878977'

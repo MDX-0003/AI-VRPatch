@@ -100,7 +100,7 @@ def from_case(
                         (case.erp_width, case.erp_height), log)
         cap.release()
         geometry_sha = _sha256_file(vdir / "clip.json")
-        set_extract_version(case_file, version, geometry_sha)
+        set_extract_version(case_file, version)
         derived = case_file.parent / "derived"
         derived.mkdir(parents=True, exist_ok=True)
         for f in ("clip.mp4", "clip.json", "clip_mask.png"):
