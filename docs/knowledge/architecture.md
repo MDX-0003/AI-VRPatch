@@ -1,8 +1,8 @@
-> 层: knowledge    时效: 随代码演进更新（最后核对 2026-09-18）
+> 层: knowledge    时效: 随代码演进更新（最后核对 2026-09-20）
 
 # 架构与核心链路
 
-三段式工作流：**选区（pick）→ 抽取（extract）→ 合并（merge）**。`case.toml` 是唯一真源；
+三段式工作流：**选区（pick）→ 抽取（extract）→ 对齐（restore，自动）→ 合并（merge）**。`case.toml` 是唯一真源；
 `clip.json` 是对外契约（派生物，字段集冻结）。
 
 ```
@@ -11,11 +11,12 @@
     │                                                        │
     │ case.py（sha256 校验）                                  │
     ▼                                                        │
-clip.json（派生契约）+ clip_mask.png ──→ 外部 AI 工具重绘 ──→ ai_clip.mp4
+clip.json（派生契约）+ clip_mask.png ──→ 外部 AI 工具重绘 ──→ ai_clip.mp4（任意 fps/帧数）
     ▲   clip.mp4（viewport+margin 画面）                     │
     │                                                       │
 vrpatch-extract ────────────────────────────────────────────┘（人只参与 AI 一段）
 
+ai_clip.mp4 ──restore（merge 自动触发；rife 补帧拉伸）──> ai_clip_aligned.mp4（精确 N 帧 @ 段 fps）
 ERP video ──vrpatch-merge──> 贴回后的 360 视频
                  （流式：逐帧 read → composite → encode）
 ```
@@ -25,10 +26,14 @@ ERP video ──vrpatch-merge──> 贴回后的 360 视频
 1. **sidecar 解析**：`case.load_sidecar_single_segment` 解析并强制单段（R5 守卫）；`--inner` 可覆盖内圈。
 2. **源视频探测**：分辨率/帧数与 sidecar 不符时告警并以源为准；`--max-frames` 只缩短写入帧数（预览），不改变 AI 对齐帧数 `n_seg`。
 3. **几何预计算**：`composite.SegmentMaps` 每段构建一次——视口采样图（`build_view_map`）、footprint bbox 内的逆投影贴回图（`build_paste_map`）、羽化内圈掩膜。8K 下这一步 ~0.2s，换来每帧不再重建 (H,W,3) 射线网格。
-4. **AI clip 对齐**：`AiFrameSource` 顺序解码，`framealign.index_map` 产出目标→源帧号映射（单调，源帧至多解码一次，只 resize 用到的帧）；帧数不足时尾帧重复补齐并告警。
+4. **AI clip 对齐**：先经 `restore.resolve_ai_clip`（见下节）拿到满足精确时间契约的 clip，`AiFrameSource` 再顺序解码，`framealign.index_map` 产出目标→源帧号映射（单调，源帧至多解码一次，只 resize 用到的帧）；契约已被 restore 满足时 index_map 是恒等映射，尾帧重复只作为缺失二进制时的降级路径。
 5. **编码**：`media.FfmpegSink`，rawvideo bgr24 stdin → libx264 crf/preset → yuv420p；有音轨则两遍（video-only 编码后 `-c copy` remux，防止 muxer 改变帧数）。参数是像素基线的一部分（门槛 2）。
 6. **逐帧合成**（`SegmentMaps.composite_frame`）：
    `remap_viewport`（ERP→视口，BORDER_WRAP）→ `blend.multiband_blend`（AI 内圈 + 原外圈，Laplacian 5 层 + feather 16px 高斯羽化掩膜）→ 逆投影 remap 到 footprint bbox → **只写 `cover` 掩膜内像素**。footprint 外逐像素不变是本工具的核心保证。
+
+## restore 底层链路（`restore.py` + `rife.py`，merge 自动触发）
+
+目标契约：与配对 extract 的段**帧数、fps 完全一致**（`sidecar_target`），分辨率不动（merge 负责缩放）。时间规则（`restore.py` docstring 是唯一权威）：内容短于段 → **插值拉伸**（rife-ncnn-vulkan `-n` 精确目标帧数，端点保持铺满整段）；帧数不少 → `framealign.index_map` 纯挑选（fps 标签错时重新压码修正）。产物 `<ai_stem>_aligned.mp4` 与原始 clip 同目录；`aligned_is_current`（契约满足 + 不旧于原始）命中即复用。rife 二进制（Vulkan、免 Python 依赖）发现顺序：`$VRPATCH_RIFE` → `bin/rife-ncnn-vulkan*/` → `PATH`；缺二进制且需要拉伸时 merge 大声告警并退回旧重采样行为。1080p 590 帧的实测 ~72s（RTX 5080）。
 
 ## extract 底层链路（`cli/extract.py`）
 

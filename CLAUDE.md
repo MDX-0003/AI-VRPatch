@@ -17,11 +17,13 @@ src/vrpatch/
 ├── extract.py        视口抽帧、clip 读写、掩膜图生成
 ├── composite.py      SegmentMaps（每段几何一次）+ composite_frame（贴回一帧）
 ├── framealign.py     时间重采样唯一规则 index_map()
+├── restore.py        AI clip 时间对齐（拉伸/挑选规则唯一权威）；merge 自动触发
+├── rife.py           rife-ncnn-vulkan 发现与调用（外部预编译 exe，Vulkan，bin/ 内）
 ├── media.py          ffmpeg 惰性发现 + FfmpegSink（libx264 编码，基线参数冻结）
 ├── case.py           case.toml ↔ Case ↔ clip.json；sha256 校验；单段守卫
 ├── detect.py         propose_inner 扩展点（自动内圈建议，默认返回居中半幅）
 ├── progress.py       Log / RateMeter（TTY \r 刷新 vs 重定向整行的自适应）
-├── cli/{extract,merge,serve,pick}.py   console scripts（typer）；serve=网页总入口，pick 是其别名
+├── cli/{extract,merge,restore,serve,pick}.py   console scripts（typer）；serve=网页总入口，pick 是其别名
 └── web/
     ├── app.py        dashboard 后端（REST API + 页面路由）
     ├── tasks.py      单任务队列：extract/merge 以 subprocess 跑 CLI，日志落 logs/ 供前端 tail
@@ -38,7 +40,7 @@ docs/                 分层文档（见 docs/README.md）
 
 1. **单段**：sidecar `segments` 必须恰为 1，多段报错（`case.load_sidecar_single_segment`），禁止静默取 `segments[0]`。
 2. **`clip.json` 是对外契约**：字段集与 `version` 语义不得变动；它是派生物，从 case.toml 再生，不手改。
-3. **时间重采样只有一处**：`framealign.index_map`。禁止在任何地方重写 `round(i*src/dst)` 规则。
+3. **时间重采样只有一处**：`framealign.index_map`。禁止在任何地方重写 `round(i*src/dst)` 规则。restore 的补帧拉伸是唯一例外（内容短于段时的插值铺满），其规则只记录在 `restore.py` docstring；挑选/修 fps 仍必须走 `index_map`。
 4. **不允许模块级可变缓存**；每段几何由调用方持有（`SegmentMaps` 建一次用整段）。
 5. **投影/合成几何不得改动**，除非 `tests/test_stitch_identity`（新实现 vs `tests/reference.py`）保持 `maxdiff==0`，且 `docs/knowledge/verification.md` 的像素回归重跑通过。
 6. **编码参数（libx264 crf/preset、bgr24 rawvideo、两遍音频 mux）是基线的一部分**：改动即破坏门槛 2，必须重立基线并记录。
