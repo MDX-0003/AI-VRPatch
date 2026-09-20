@@ -5,7 +5,7 @@ import json
 import pytest
 
 from vrpatch.case import (load_case, case_to_sidecar, record_sha256,
-                          load_sidecar_single_segment)
+                          load_sidecar_single_segment, set_draft_geometry)
 from vrpatch.sidecar import save_sidecar, Sidecar, Segment, Viewport, InnerRect
 
 
@@ -59,6 +59,22 @@ def test_case_to_sidecar_roundtrip(tmp_path):
     save_sidecar(sc, out)
     loaded = json.loads(out.read_text(encoding="utf-8"))
     assert loaded["version"] == 1 and loaded["fps"] == 30.0
+
+
+def test_set_draft_geometry(tmp_path):
+    """Reset-draft action: overwrite viewport/inner, leave the rest intact."""
+    p = write_case(tmp_path)
+    import hashlib
+    digest = hashlib.sha256(b"hello world").hexdigest()
+    text = p.read_text(encoding="utf-8").replace("%064d" % 0, digest)
+    p.write_text(text, encoding="utf-8")
+    set_draft_geometry(p, yaw=-33.5, pitch=12.0, fov=45.0, vpw=640, vph=360,
+                       x=1, y=2, w=3, h=4)
+    c = load_case(p, verify=True)
+    assert (c.viewport.yaw_deg, c.viewport.pitch_deg, c.viewport.fov_h_deg) == (-33.5, 12.0, 45.0)
+    assert (c.viewport.width, c.viewport.height) == (640, 360)
+    assert (c.inner.x, c.inner.y, c.inner.width, c.inner.height) == (1, 2, 3, 4)
+    assert c.source.path == "src.bin" and c.frame_end == 9  # rest untouched
 
 
 def test_single_segment_guard(tmp_path):

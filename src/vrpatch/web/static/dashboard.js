@@ -121,6 +121,14 @@ async function postGeometry(kind, body) {
   } catch (e) { alert(e.message); }
 }
 
+async function resetDraft() {
+  if (!SEL) return;
+  try {
+    await api(`/api/case/${SEL}/reset-draft`, {});
+    await refreshCase();
+  } catch (e) { alert(e.message); }
+}
+
 // inner drag: display and submission are both PickCoords outputs.
 // Submission uses frac (0..1 of the preview) — resolution-independent, the
 // server converts to viewport pixels.

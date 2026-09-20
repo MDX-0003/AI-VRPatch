@@ -23,7 +23,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
-from ..case import load_case
+from ..case import load_case, set_draft_geometry, extract_version
 from .render import PreviewStore
 from .tasks import QUEUE
 
@@ -275,6 +275,30 @@ async def api_ai_clip(request):
     return JSONResponse(_case_info(name))
 
 
+async def api_reset_draft(request):
+    """"清空草稿": discard the draft region and restore the viewport/inner
+    recorded by the latest extract version. Only the preview and case.toml
+    draft change — extract artifacts are immutable and untouched."""
+    name = request.path_params["name"]
+    cp = case_path(name)
+    if cp is None:
+        return JSONResponse({"error": "no such case"}, status_code=404)
+    ev = extract_version(cp)
+    if not ev:
+        return JSONResponse({"error": "还没有任何 Extract 版本可回退"}, status_code=400)
+    sj = cp.parent / "extracts" / ev / "clip.json"
+    if not sj.is_file():
+        return JSONResponse({"error": f"extract {ev} 缺少 clip.json"}, status_code=400)
+    seg = json.loads(sj.read_text(encoding="utf-8"))["segments"][0]
+    vp, inner = seg["viewport"], seg["inner"]
+    set_draft_geometry(
+        cp, yaw=vp["yaw_deg"], pitch=vp["pitch_deg"], fov=vp["fov_h_deg"],
+        vpw=vp["width"], vph=vp["height"],
+        x=inner["x"], y=inner["y"], w=inner["width"], h=inner["height"])
+    _stores.pop(name, None)
+    return JSONResponse(_case_info(name))
+
+
 async def api_merge(request):
     """Merge one extract version: that directory's clip.json + its registered
     ai_clip. Which version to merge is a human choice in the dashboard."""
@@ -349,6 +373,7 @@ routes = [
     Route("/api/case/{name}", api_case),
     Route("/api/case/{name}/viewport", api_viewport, methods=["POST"]),
     Route("/api/case/{name}/inner", api_inner, methods=["POST"]),
+    Route("/api/case/{name}/reset-draft", api_reset_draft, methods=["POST"]),
     Route("/api/case/{name}/extract", api_extract, methods=["POST"]),
     Route("/api/case/{name}/ai-clip", api_ai_clip, methods=["POST"]),
     Route("/api/case/{name}/merge", api_merge, methods=["POST"]),

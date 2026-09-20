@@ -103,6 +103,18 @@ def extract_version(case_path: str | Path) -> str | None:
     return d.get("extract", {}).get("current")
 
 
+def set_draft_geometry(case_path: str | Path, *, yaw: float, pitch: float,
+                       fov: float, vpw: int, vph: int,
+                       x: int, y: int, w: int, h: int) -> None:
+    """Overwrite the draft viewport/inner in case.toml (the "reset draft"
+    action: restore the region recorded by the latest extract version)."""
+    _set_section(case_path, "viewport", {
+        "yaw_deg": yaw, "pitch_deg": pitch, "fov_h_deg": fov,
+        "width": vpw, "height": vph})
+    _set_section(case_path, "inner", {
+        "x": x, "y": y, "width": w, "height": h})
+
+
 def _set_section(case_path: str | Path, section: str, kv: dict) -> None:
     """Replace the `[section]` table with the given keys (textual, keeps the
     rest of the file byte-stable). Windows paths are written as TOML literal
