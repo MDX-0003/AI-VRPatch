@@ -8,17 +8,17 @@
       "frame_start": 0,
       "frame_end": 589,
       "viewport": {
-        "yaw_deg": -1.1,
-        "pitch_deg": -8.6,
+        "yaw_deg": -7.3,
+        "pitch_deg": -10.1,
         "fov_h_deg": 59.0,
         "width": 1920,
         "height": 1080
       },
       "inner": {
-        "x": 524,
-        "y": 155,
-        "width": 927,
-        "height": 851
+        "x": 650,
+        "y": 219,
+        "width": 654,
+        "height": 560
       }
     }
   ],
