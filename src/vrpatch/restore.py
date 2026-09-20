@@ -38,8 +38,10 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from .case import load_sidecar_single_segment
 from .framealign import index_map
 from .media import FfmpegSink
+from .sidecar import load_sidecar
 
 #: container fps read back within this of the target counts as matching
 FPS_TOL = 0.01
@@ -90,6 +92,17 @@ def aligned_path_for(ai_path: str | Path) -> Path:
     """The aligned artifact lives next to the raw AI clip: <stem>_aligned.mp4."""
     p = Path(ai_path)
     return p.with_name(p.stem + "_aligned.mp4")
+
+
+def sidecar_target(sidecar_path: str | Path) -> tuple[int, float]:
+    """(frame count, fps) an AI clip must match — the sidecar's segment.
+
+    Goes through the single-segment guard (R5), so a multi-segment sidecar
+    fails loudly here too.
+    """
+    seg = load_sidecar_single_segment(sidecar_path)
+    fps = float(load_sidecar(sidecar_path).fps)
+    return seg.frame_end - seg.frame_start + 1, fps
 
 
 def aligned_is_current(aligned: str | Path, ai: str | Path,
@@ -245,3 +258,51 @@ def restore_clip(ai_path: str | Path, out_path: str | Path,
     return {"mode": mode, "src": info, "out": got,
             "target_frames": target_frames, "target_fps": target_fps,
             "elapsed_s": round(time.time() - t0, 1)}
+
+
+def resolve_ai_clip(ai_path: str | Path, target_frames: int, target_fps: float,
+                    *, no_restore: bool = False, log=None,
+                    interpolator_factory=None) -> tuple[str, dict | None]:
+    """The clip merge should actually read, given the raw AI clip.
+
+    Frozen workflow decision: auto-restore runs here, not as a separate user
+    step — merge is the only consumer of the exact contract, so it owns
+    producing it. Returns (path, restore_report|None):
+    - clip already matches → the raw path itself, no artifact touched;
+    - mismatch and an aligned artifact is current → reused, not rebuilt;
+    - mismatch → built once next to the raw clip (see restore_clip);
+    - stretch required but no rife binary → loud WARNING and the raw path,
+      letting merge's tolerant resampler degrade gracefully (installing the
+      binary must not be a hard prerequisite for an otherwise valid merge);
+    - ``no_restore`` → raw path always (escape hatch for regression runs).
+
+    ``interpolator_factory``: None→exe | RifeInterpolator; tests inject a fake.
+    """
+    log = log or _NullLog()
+    if no_restore:
+        return str(ai_path), None
+    info = probe_clip(ai_path)
+    if not needs_restore(info, target_frames, target_fps):
+        log.info(f"ai clip matches the segment contract "
+                 f"({info.frames} frames @ {info.fps:g}fps); no restore needed")
+        return str(ai_path), None
+    from .rife import RifeInterpolator, find_rife
+
+    aligned = aligned_path_for(ai_path)
+    if aligned_is_current(aligned, ai_path, target_frames, target_fps):
+        log.info(f"restore: reusing current aligned clip {aligned}")
+        return str(aligned), None
+    plan = restore_plan(info, target_frames)
+    if plan == "stretch" and find_rife() is None:
+        log.info(f"WARNING: AI clip is {info.frames} frames short of the "
+                 f"segment ({target_frames}) and rife-ncnn-vulkan was not found "
+                 f"(bin/ or VRPATCH_RIFE); falling back to resample + freeze fill. "
+                 f"Install it to restore properly.")
+        return str(ai_path), None
+    if interpolator_factory is None:
+        interpolator_factory = (lambda exe: RifeInterpolator(exe))
+    interpolator = (interpolator_factory(find_rife())
+                    if plan == "stretch" else None)
+    report = restore_clip(ai_path, aligned, target_frames, target_fps,
+                          interpolator=interpolator, log=log)
+    return str(aligned), report

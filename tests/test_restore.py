@@ -17,8 +17,8 @@ from vrpatch.extract import write_clip
 from vrpatch.media import FfmpegSink
 from vrpatch.restore import (ClipInfo, FPS_TOL, aligned_is_current,
                              aligned_path_for, needs_restore, png_name,
-                             probe_clip, restore_clip, restore_plan,
-                             sidecar_target)
+                             probe_clip, resolve_ai_clip, restore_clip,
+                             restore_plan, sidecar_target)
 from vrpatch.sidecar import (InnerRect, Segment, Sidecar, Viewport,
                              save_sidecar)
 
@@ -274,3 +274,61 @@ def test_cli_clean_error_when_rife_missing_for_stretch(clip: Path,
                                          "--sidecar", str(sidecar_file), "-q"])
     assert r.exit_code != 0
     assert "rife-ncnn-vulkan not found" in r.output
+
+
+# ---- resolve_ai_clip (the merge-side decision) ---------------------------------
+
+def test_resolve_passes_matching_clip_through(clip: Path):
+    rec = Rec()
+    path, rep = resolve_ai_clip(clip, 12, 30.0, log=rec)
+    assert path == str(clip)
+    assert rep is None
+    assert any("no restore needed" in ln for ln in rec.lines)
+
+
+def test_resolve_builds_aligned_on_stretch(clip: Path, monkeypatch):
+    import vrpatch.rife as rife_mod
+    monkeypatch.setattr(rife_mod, "find_rife", lambda: "fake-rife.exe")
+    rec = Rec()
+    path, rep = resolve_ai_clip(clip, 20, 60.0, log=rec,
+                                interpolator_factory=lambda exe: (rife_like_interpolator))
+    aligned = aligned_path_for(clip)
+    assert path == str(aligned)
+    assert rep is not None and rep["mode"] == "stretch"
+    assert probe_clip(aligned).frames == 20
+
+
+def test_resolve_reuses_current_aligned(clip: Path, monkeypatch):
+    import vrpatch.rife as rife_mod
+    monkeypatch.setattr(rife_mod, "find_rife", lambda: "fake-rife.exe")
+
+    def spy_factory(exe):
+        calls.append(exe)
+        return rife_like_interpolator
+
+    calls = []
+    path1, _ = resolve_ai_clip(clip, 20, 60.0, log=Rec(),
+                               interpolator_factory=spy_factory)
+    path2, rep2 = resolve_ai_clip(clip, 20, 60.0, log=Rec(),
+                                  interpolator_factory=spy_factory)
+    assert calls == ["fake-rife.exe"]  # built once, then reused
+    assert path2 == path1 == str(aligned_path_for(clip))
+    assert rep2 is None  # reuse is not a restore run
+
+
+def test_resolve_falls_back_when_rife_missing(clip: Path, monkeypatch):
+    import vrpatch.rife as rife_mod
+    monkeypatch.setattr(rife_mod, "find_rife", lambda: None)
+    rec = Rec()
+    path, rep = resolve_ai_clip(clip, 20, 60.0, log=rec)
+    assert path == str(clip)  # merge's tolerant resampler takes over
+    assert rep is None
+    assert any("WARNING" in ln and "rife-ncnn-vulkan" in ln for ln in rec.lines)
+    assert not aligned_path_for(clip).exists()
+
+
+def test_resolve_no_restore_flag_bypasses_everything(clip: Path):
+    path, rep = resolve_ai_clip(clip, 20, 60.0, no_restore=True, log=Rec())
+    assert path == str(clip)
+    assert rep is None
+    assert not aligned_path_for(clip).exists()

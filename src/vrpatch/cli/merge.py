@@ -25,6 +25,7 @@ from ..composite import SegmentMaps
 from ..framealign import index_map, short_by
 from ..media import FfmpegSink, ffmpeg_path, has_audio
 from ..progress import Log, RateMeter, format_duration, open_log_file
+from ..restore import resolve_ai_clip
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -101,6 +102,10 @@ def merge(
                                                     "pairing guard)"),
     force: bool = typer.Option(False, help="proceed even if the geometry "
                                            "fingerprint mismatches"),
+    no_restore: bool = typer.Option(False, help="feed the raw AI clip to the "
+                                                "resampler even when it misses "
+                                                "the segment contract "
+                                                "(pre-restore behavior)"),
     progress_every: int = typer.Option(0),
     quiet: bool = typer.Option(False, "-q"),
 ):
@@ -178,7 +183,14 @@ def merge(
 
     # ---- 4. AI clip ----------------------------------------------------------
     log.phase("aligning AI clip")
-    ai_src = AiFrameSource(str(ai), (vp.width, vp.height), sidecar_fps, n_seg, log)
+    if not Path(ai).is_file():
+        raise typer.Exit(f"cannot open AI clip: {ai}")
+    try:
+        use_ai, restored = resolve_ai_clip(str(ai), n_seg, sidecar_fps,
+                                           no_restore=no_restore, log=log)
+    except FileNotFoundError as e:
+        raise typer.Exit(str(e))
+    ai_src = AiFrameSource(use_ai, (vp.width, vp.height), sidecar_fps, n_seg, log)
     if ai_src.short:
         log.info(f"WARNING: AI clip is {ai_src.short} frames short; the last "
                  f"decodable frame is reused to fill the gap.")
@@ -235,6 +247,8 @@ def merge(
     if report:
         report.write_text(json.dumps({
             "input": str(input_video), "ai": str(ai), "sidecar": str(sidecar),
+            "ai_clip_used": use_ai,
+            "restore_mode": (restored or {}).get("mode"),
             "output": str(output), "frames_written": written,
             "frames_expected": n, "encoder": "ffmpeg/libx264",
             "crf": crf, "preset": preset, "feather": feather, "levels": levels,
