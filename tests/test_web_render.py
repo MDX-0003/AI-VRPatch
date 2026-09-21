@@ -49,25 +49,25 @@ def test_fixed_names_and_gc_of_legacy_keyed_files(store):
     pick = store.dir
     legacy1 = pick / "erp_078337921b.png"
     legacy2 = pick / "vp_078337921b.png"
+    legacy3 = pick / "erp.png"      # fixed name of the removed ERP preview
     legacy1.write_bytes(b"x")
     legacy2.write_bytes(b"x")
-    assert store.erp_png() == pick / "erp.png"
+    legacy3.write_bytes(b"x")
     assert store.viewport_png() == pick / "vp.png"
-    assert (pick / "erp.png").is_file() and (pick / "vp.png").is_file()
-    assert not legacy1.exists() and not legacy2.exists()
-    assert sorted(p.name for p in pick.iterdir()) == ["erp.png", "vp.png"]
+    assert (pick / "vp.png").is_file()
+    assert not legacy1.exists() and not legacy2.exists() and not legacy3.exists()
+    assert sorted(p.name for p in pick.iterdir()) == ["vp.png"]
 
 
 def test_geometry_change_rewrites_same_file(store):
     pick = store.dir
-    store.erp_png()
     store.viewport_png()
     first = (pick / "vp.png").read_bytes()
     store.set_inner(10, 10, 100, 80)          # new content key, same path
     assert store.viewport_png() == pick / "vp.png"
     assert (pick / "vp.png").read_bytes() != first
     # the old keyed scheme would have left vp_<newkey>.png behind
-    assert sorted(p.name for p in pick.iterdir()) == ["erp.png", "vp.png"]
+    assert sorted(p.name for p in pick.iterdir()) == ["vp.png"]
 
 
 def test_unchanged_geometry_does_not_rewrite(store):
@@ -148,5 +148,7 @@ def test_img_route_frame_param(tmp_path, monkeypatch):
     for bad in ({"frame": "9999"}, {"frame": "-1"}, {"frame": "abc"}):
         r = asyncio.run(webapp.img(_ImgRequest("t", "vp.png", bad)))
         assert r.status_code == 400, bad
-    assert asyncio.run(
-        webapp.img(_ImgRequest("t", "other.png"))).status_code == 404
+    # the server-side ERP preview is gone: the browser scrubs the video itself
+    for missing in ("other.png", "erp.png"):
+        r = asyncio.run(webapp.img(_ImgRequest("t", missing)))
+        assert r.status_code == 404, missing

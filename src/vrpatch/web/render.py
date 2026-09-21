@@ -1,20 +1,16 @@
-"""Server-side image rendering for the picker: no client-side canvas needed.
+"""Server-side image rendering for the picker's viewport pane.
 
-Resolution policy (review fix): picking only needs to see *where* the viewport
-and inner rect sit, so nothing here touches the full 8K frame after startup.
-The source frame is decoded once and kept at MEDIUM_W (4K); the ERP preview is
-a 1024-wide downscale of that, and the viewport preview is a proportional
-reprojection from the medium ERP (geometry scales linearly, so this is the
-same picture at reduced resolution). A refresh redraws overlays on these
-cached bases — milliseconds, not seconds.
+The ERP pane needs no server rendering at all: the dashboard scrubs the
+source video in a native <video> element (browser decode, zero files). Only
+the viewport preview is a reprojection, so it stays server-side (projection
+math has one authority). Resolution policy: the startup frame is decoded once
+and kept at MEDIUM_W (4K) for the default preview; any other frame is decoded
+on demand (~1s on 8K) and cached as a JPEG under derived/pick/vpframes/.
 
-Previews are written under <case dir>/derived/pick/ under two fixed names
-(erp.png / vp.png). The directory is a *regenerable cache*: safe to delete at
-any time, and kept bounded — each render drops leftover files from older
-schemes (content-keyed names) and stale viewport-geometry cache dirs, so the
-directory never grows beyond the fixed previews plus the per-frame viewport
-JPEGs, which are bounded by the source frame count and invalidated (then
-GC'd) whenever the viewport geometry moves.
+The directory is a *regenerable cache*: safe to delete at any time, and kept
+bounded — each render drops leftover files from older schemes (content-keyed
+names) and stale viewport-geometry cache dirs, so it never grows beyond
+vp.png plus per-frame JPEGs bounded by the source frame count.
 """
 
 from __future__ import annotations
@@ -27,9 +23,8 @@ import cv2
 import numpy as np
 
 from ..case import load_case
-from ..projection import (_direction_to_erp_px, camera_rotation, erp_to_rect)
+from ..projection import erp_to_rect
 
-ERP_PREVIEW_W = 1024   # ERP preview (2:1)
 VIEWPORT_PREVIEW_W = 960  # viewport preview cap
 MEDIUM_W = 4096        # cached working copy of the source frame
 FRAME_JPEG_Q = 85      # per-frame viewport cache quality
@@ -62,13 +57,10 @@ class PreviewStore:
         self._med = self._medium_of(self._frame)
         self.med_w = self._med.shape[1]
         self.med_h = self._med.shape[0]
-        self._erp_small = cv2.resize(self._med, (ERP_PREVIEW_W, ERP_PREVIEW_W // 2),
-                                     interpolation=cv2.INTER_AREA)
         self.key = self._new_key()
-        # output name -> content key the file on disk was drawn for; fixed
-        # filenames are safe because re-render is keyed on this, not on
-        # file existence (which would serve a stale picture after a move)
-        self._rendered: dict[str, str] = {}
+        # fixed filename vp.png is safe because re-render is keyed on
+        # (geometry key, frame) — file existence alone would serve stale pictures
+        self._rendered: dict[str, tuple] = {}
 
     def _medium_of(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -96,11 +88,6 @@ class PreviewStore:
         self.key = self._new_key()
 
     # ---- previews (cheap: overlay on cached bases) ---------------------------
-
-    def erp_png(self) -> Path:
-        out = self.dir / "erp.png"
-        self._render("erp", out, self._draw_erp)
-        return out
 
     def viewport_png(self, frame: int | None = None) -> Path:
         """Viewport preview with the inner overlay. frame=None reprojects from
@@ -155,28 +142,6 @@ class PreviewStore:
                        int((inner.y + inner.height) * scale)),
                       (0, 0, 255), 2)
 
-    def _render(self, name: str, out: Path, draw) -> None:
-        if out.exists() and self._rendered.get(name) == self.key:
-            return
-        draw(out)
-        self._rendered[name] = self.key
-        self._gc()
-
-    def _draw_erp(self, out: Path):
-        small = self._erp_small.copy()
-        w, h = small.shape[1], small.shape[0]
-        d = camera_rotation(np.radians(self.case.viewport.yaw_deg),
-                            np.radians(self.case.viewport.pitch_deg))[:, 2]
-        px, py = _direction_to_erp_px(d[None, :], w, h)
-        cx, cy = int(round(px[0])), int(round(py[0]))
-        cv2.drawMarker(small, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 24, 2)
-        # rough viewport footprint: fov as fraction of 360, 16:9-ish aspect
-        fw = int(w * self.case.viewport.fov_h_deg / 360.0)
-        fh = int(fw * self.case.viewport.height / self.case.viewport.width)
-        cv2.rectangle(small, (cx - fw // 2, cy - fh // 2),
-                      (cx + fw // 2, cy + fh // 2), (0, 255, 0), 1)
-        cv2.imwrite(str(out), small)
-
     def _gc(self):
         """Keep derived/pick bounded: this directory is a regenerable cache,
         so anything in the preview namespace we did not just write is deleted
@@ -184,6 +149,7 @@ class PreviewStore:
         older viewport geometries."""
         for legacy in (*self.dir.glob("erp_*.png"), *self.dir.glob("vp_*.png")):
             legacy.unlink(missing_ok=True)
+        (self.dir / "erp.png").unlink(missing_ok=True)  # removed: ERP pane is a <video> now
         vpf = self.dir / "vpframes"
         if vpf.is_dir():
             for d in vpf.iterdir():

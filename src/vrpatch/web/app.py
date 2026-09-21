@@ -79,7 +79,7 @@ def preview_urls(name: str) -> dict:
     if store is None:
         return {}
     k = store.key
-    return {"erp": f"/img/{name}/erp.png?k={k}", "vp": f"/img/{name}/vp.png?k={k}"}
+    return {"vp": f"/img/{name}/vp.png?k={k}"}
 
 
 # ---- pages -----------------------------------------------------------------
@@ -93,26 +93,21 @@ async def img(request):
     name = request.path_params["name"]
     fn = request.path_params["file"]
     store = get_store(name)
-    if store is None or "/" in fn or "\\" in fn:
+    if store is None or fn != "vp.png" or "/" in fn or "\\" in fn:
         return JSONResponse({"error": "not found"}, status_code=404)
-    if fn == "erp.png":
-        p = store.erp_png()
-    elif fn == "vp.png":
-        raw = request.query_params.get("frame")
-        if raw is None:
-            frame = None
-        else:
-            try:
-                frame = int(raw)
-            except ValueError:
-                return JSONResponse({"error": "frame must be an integer"},
-                                    status_code=400)
-        try:
-            p = store.viewport_png(frame)
-        except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
+    raw = request.query_params.get("frame")
+    if raw is None:
+        frame = None
     else:
-        return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            frame = int(raw)
+        except ValueError:
+            return JSONResponse({"error": "frame must be an integer"},
+                                status_code=400)
+    try:
+        p = store.viewport_png(frame)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     return FileResponse(p)
 
 
