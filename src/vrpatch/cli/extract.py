@@ -3,9 +3,10 @@
 Streaming: one 8K source frame (~96 MB) is decoded, projected and written at a
 time — never load the frame range into a list (590 frames would be ~55 GB and
 thrash the machine; that was tried once and is why this module looks the way it
-does). The mask is part of the extract contract (black = region the external AI
-tool regenerates, white = fixed anchor margin); test_extract_contract enforces
-it.
+does). The mask is part of the extract contract (black = the region merge
+replaces with AI content, white = the anchor margin kept from the source; the
+mask is for this tool's merge only and never reaches the external AI tool);
+test_extract_contract enforces it.
 
 Every run mirrors its console output to logs/<name>_<timestamp>.log.
 """

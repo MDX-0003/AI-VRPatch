@@ -3,6 +3,7 @@
 *.aaa
 cases/*/source/
 cases/*/derived/
+cases/tmp/
 logs/
 debug_*.png
 *_f*.png

@@ -12,7 +12,7 @@
 
 ```
 ① Extract            ② 你自己拿去跑 AI            ③ Merge
-   抠出小块画面+蒙版 →    （VACE / Viggle / …）   →    贴回全景，输出成品
+   抠出小块画面     →    （VACE / Viggle / …）   →    贴回全景，输出成品
         ↑                                         
    （选区域用网页上的选区面板，点点拖拖就行）
                      ↘ Merge 前自动补帧对齐（Restore）：
@@ -23,6 +23,8 @@
 中间第 ② 步必须由人完成（AI 工具是外部的），所以流水线断成两段。
 
 **AI 产物帧率不一致？Merge 会自动对齐（Restore）**：外部 AI 工具常输出 24fps，甚至比原段少一小截。Merge 前会自动把 AI 产物补帧/拉伸到与原段**帧数、帧率完全一致**（`<AI文件名>_aligned.mp4`，放在 AI 产物旁边，已对齐则直接复用），不再出现"结尾定格 1/3 秒"这类隐式补齐。这需要本机有 [rife-ncnn-vulkan](https://github.com/nihui/rife-ncnn-vulkan)（免 Python 依赖的预编译 exe，Vulkan 直驱任意显卡）：下载 release zip 解压到项目根 `bin/` 即可（1080p 590 帧约 1 分钟，RTX 5080 实测 72s）。没装也能跑 merge——会告警并退回旧的"重采样+末帧补齐"行为。也可单独执行：`vrpatch-restore --ai <AI结果> --sidecar <clip.json>`。
+
+**AI 产物有整体缩放/偏移？Merge 自动检测并校正**：外部工具输出的画面常带有轻微的全局缩放/平移（来自其内部工作分辨率的重采样，横竖比例还可能不同），贴回时表现为接缝错位。Merge 自动在 inner 之外的环带（背景静态区，匹配最干净）逐帧拟合这一变换——实测全片恒定，取中位数作为一个全局修正施加在每帧 AI 画面上；inner 内的静态纹理再验证一遍并记录残差。环带相关性过低（AI 输出与原画面差异大到不可信）时拒绝施加并告警。网页 Merge 强制启用；命令行 `--scale-fit auto` 开启（默认 off，恪守像素基线），拟合缓存在 AI 产物旁的 `<名称>.scalefit.json`，AI 文件变了会自动重拟。
 
 **选区是草稿，Extract 生成版本**：网页上拖框、点选随时可改、可反悔，只影响预览；每次点 Extract 生成一个独立版本目录 `cases/<案例>/extracts/<时间戳>/`（clip.mp4 / clip.json / 掩膜），互不覆盖。每个版本可独立"选入 AI 结果"（在该目录记录 ai_clip 路径标记）；**Merge 时选一个版本**，就用那一版的 clip.json 和 AI 结果合并，成品为 `derived/out_<版本>.mp4`——导出后再怎么改选区、或选择合并旧版本，都由你显式决定，不存在隐式错位。融合框（inner）例外地取**当前草稿**：合并前在网页上重新拖框即生效，无需重跑 Extract（`out_<版本>.merge.json` 记录每次实际用的框）；若视口 yaw/pitch/fov 在导出后被移动过，合并会提示先重置选区。
 
@@ -41,7 +43,7 @@ uv run vrpatch-serve            # 启动控制台，浏览器打开 http://127.0
 1. **新建案例**：左侧素材库下拉框选视频，一键生成案例；
 2. **选区**：全景图点一下定视口中心；视口图上拖框圈住人物，松手保存；
 3. **Extract**：点按钮后台执行，页面实时显示帧进度与日志；
-4. 把 `cases/<案例>/derived/` 里的 `clip.mp4 + clip_mask.png` 交给外部 AI 工具重绘；
+4. 把 `cases/<案例>/derived/` 里的 `clip.mp4` 交给外部 AI 工具重绘（`clip_mask.png` 不用给——它是 merge 贴回融合用的内圈记录，AI 工具不需要）；
 5. **选入 AI 结果**：点按钮浏览本机目录，指认 AI 产出的 `ai_clip.mp4`（帧率/帧数不必和原段一致）；
 6. **Merge**：点按钮贴回全景（需要时会先自动补帧对齐），成品在 `cases/<案例>/derived/out.mp4`。
 
@@ -62,7 +64,7 @@ E:\360AIGC\vrpatch\
 │       └── derived\             ← 这个案例的所有产物，越跑越多
 │           ├── clip.mp4         ← Extract：抠出的视口画面（交给 AI 的就是它）
 │           ├── clip.json        ← sidecar（对外契约，自动生成）
-│           ├── clip_mask.png    ← 内圈掩膜（和 clip.mp4 一起交给 AI）
+│           ├── clip_mask.png    ← 内圈掩膜（merge 贴回融合用，AI 工具不需要）
 │           ├── pick\            ← 选区预览缓存（erp/vp 两张小图）
 │           └── out.mp4          ← Merge：最终成品
 └── logs\                        ← 注意：运行日志不进案例文件夹，统一在这（按命令+案例名+时间戳命名）

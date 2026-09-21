@@ -16,6 +16,10 @@ rawvideo bgr24 stdin → `libx264 -crf 18 -preset medium -pix_fmt yuv420p -threa
 
 与不同 ffmpeg **构建**比对合成产物会出现 mean≈0.9、max≈64 的编码噪声——这是编码器位流差异，不是几何错误；判定方法：先跑第 3 条单元 A/B（与编码无关），再决定是否需要同构建重立基线。
 
+## scale-fit 与基线的关系（2026-09-21）
+
+`merge --scale-fit off`（默认）下 AI 帧路径不加任何 warp，与上述基线逐字节同路径，门槛 2/3/4 不受影响。`auto`/指定 json 时 AI 帧在校正矩阵下 warp——**输出像素按设计改变**，属内容校正而非几何/编码改动，不入冻结基线；其正确性由 `tests/test_scalefit.py`（注入已知变换的恢复精度、恒等检测、缓存失效、参考几何守卫）与实测记录保证（Mono_dance_4k：sx=1.0129/sy=1.0234、t≈+4px，环 NCC 0.976，内圈静态块中位残差 1.0px）。
+
 ## 重跑方法
 
 ```bash

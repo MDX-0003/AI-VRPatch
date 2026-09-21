@@ -18,6 +18,8 @@ src/vrpatch/
 ├── composite.py      SegmentMaps（每段几何一次）+ composite_frame（贴回一帧）
 ├── framealign.py     时间重采样唯一规则 index_map()
 ├── restore.py        AI clip 时间对齐（拉伸/挑选规则唯一权威）；merge 自动触发
+├── scalefit.py       AI 产物全局缩放/平移的检测与修正（inner 外环带拟合 + 内圈验证；
+│                     环外可靠性是经验行为非契约——掩膜/inner 不提供给外部 AI，--scale-fit）
 ├── rife.py           rife-ncnn-vulkan 发现与调用（外部预编译 exe，Vulkan，bin/ 内）
 ├── media.py          ffmpeg 惰性发现 + FfmpegSink（libx264 编码，基线参数冻结）
 ├── case.py           case.toml ↔ Case ↔ clip.json；sha256 校验；单段守卫

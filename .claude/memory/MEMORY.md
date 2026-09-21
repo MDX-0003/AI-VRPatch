@@ -5,4 +5,6 @@
 - [网页控制台架构](web-dashboard-architecture.md) — subprocess 跑 CLI、单任务队列、TOML 路径坑
 - [Extract 版本与配对](extract-version-pairing.md) — 选区是草稿、Extract 定版；merge 显式选版本，目录归属即配对
 - [merge 融合框解耦](merge-draft-inner-decoupling.md) — inner 取活草稿+视口守卫；inner 双角色/坐标锚定/文档漂移/冒烟残留四坑
+- [inner 不进 AI](inner-is-merge-only.md) — 掩膜/inner 只在 merge 用于混合；环外像素可靠是经验非契约，拟合必须带置信验证
+- [AI 产物缩放修正](ai-output-scale-fit.md) — scalefit 环带拟合+内圈验证+门控；网页强制 auto/CLI 默认 off；ECC 方向约定坑
 - [case.toml vs clip.json](case-toml-vs-clip-json.md) — 草稿真源 vs 定版契约；合成各取哪个；选入 AI 时检查什么

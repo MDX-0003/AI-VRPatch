@@ -11,9 +11,9 @@
     │                                                        │
     │ case.py（sha256 校验）                                  │
     ▼                                                        │
-clip.json（派生契约）+ clip_mask.png ──→ 外部 AI 工具重绘 ──→ ai_clip.mp4（任意 fps/帧数）
-    ▲   clip.mp4（viewport+margin 画面）                     │
-    │                                                       │
+clip.json（派生契约）+ clip.mp4 ──→ 外部 AI 工具重绘 ──→ ai_clip.mp4（任意 fps/帧数）
+    ▲   clip.mp4（viewport+margin 画面）                     │   （clip_mask.png 不进入 AI：
+    │                                                       │     它是本工具 merge 融合的记录）
 vrpatch-extract ────────────────────────────────────────────┘（人只参与 AI 一段）
 
 ai_clip.mp4 ──restore（merge 自动触发；rife 补帧拉伸）──> ai_clip_aligned.mp4（精确 N 帧 @ 段 fps）
@@ -26,7 +26,7 @@ ERP video ──vrpatch-merge──> 贴回后的 360 视频
 1. **sidecar 解析**：`case.load_sidecar_single_segment` 解析并强制单段（R5 守卫）；`--inner` 可覆盖内圈。网页 merge 恒传当前草稿 inner 作为 `--inner`（融合框是活的创作参数，挪框不必重跑 extract），前置守卫「草稿视口==版本视口」（`case.viewports_match`，yaw 循环比较、半步摇杆容差），不一致拒绝；不传时仍用版本记录值。
 2. **源视频探测**：分辨率/帧数与 sidecar 不符时告警并以源为准；`--max-frames` 只缩短写入帧数（预览），不改变 AI 对齐帧数 `n_seg`。
 3. **几何预计算**：`composite.SegmentMaps` 每段构建一次——视口采样图（`build_view_map`）、footprint bbox 内的逆投影贴回图（`build_paste_map`）、羽化内圈掩膜。8K 下这一步 ~0.2s，换来每帧不再重建 (H,W,3) 射线网格。
-4. **AI clip 对齐**：先经 `restore.resolve_ai_clip`（见下节）拿到满足精确时间契约的 clip，`AiFrameSource` 再顺序解码，`framealign.index_map` 产出目标→源帧号映射（单调，源帧至多解码一次，只 resize 用到的帧）；契约已被 restore 满足时 index_map 是恒等映射，尾帧重复只作为缺失二进制时的降级路径。
+4. **AI clip 对齐**：先经 `restore.resolve_ai_clip`（见下节）拿到满足精确时间契约的 clip，`AiFrameSource` 再顺序解码，`framealign.index_map` 产出目标→源帧号映射（单调，源帧至多解码一次，只 resize 用到的帧）；契约已被 restore 满足时 index_map 是恒等映射，尾帧重复只作为缺失二进制时的降级路径。`--scale-fit` 开启时（网页强制 auto），`scalefit.resolve` 先在 inner 之外的环带拟合 AI 相对源片段的全局缩放/平移修正（缓存于 AI 产物旁 `<名称>.scalefit.json`，AI 文件变更即失效），`AiFrameSource` 在每帧 resize 后按该矩阵 warp；环相关性低于阈值则拒绝施加并告警。
 5. **编码**：`media.FfmpegSink`，rawvideo bgr24 stdin → libx264 crf/preset → yuv420p；有音轨则两遍（video-only 编码后 `-c copy` remux，防止 muxer 改变帧数）。参数是像素基线的一部分（门槛 2）。
 6. **逐帧合成**（`SegmentMaps.composite_frame`）：
    `remap_viewport`（ERP→视口，BORDER_WRAP）→ `blend.multiband_blend`（AI 内圈 + 原外圈，Laplacian 5 层 + feather 16px 高斯羽化掩膜）→ 逆投影 remap 到 footprint bbox → **只写 `cover` 掩膜内像素**。footprint 外逐像素不变是本工具的核心保证。
@@ -37,7 +37,7 @@ ERP video ──vrpatch-merge──> 贴回后的 360 视频
 
 ## extract 底层链路（`cli/extract.py`）
 
-case 模式：`case.load_case`（sha256 校验失败即拒）→ `VideoCapture` seek 到 `frames.start` → 逐帧 `erp_to_rect` 投影 → `write_clip`（mp4v）→ `make_mask_image`（内圈黑=重绘，外圈白=锚，硬二值无羽化）→ sidecar 写盘。产物三件套：`clip.mp4` + `clip.json` + `clip_mask.png`。
+case 模式：`case.load_case`（sha256 校验失败即拒）→ `VideoCapture` seek 到 `frames.start` → 逐帧 `erp_to_rect` 投影 → `write_clip`（mp4v）→ `make_mask_image`（内圈黑=被 AI 内容替换、外圈白=保留原画面，硬二值无羽化；掩膜仅用于本工具 merge 融合，不提供给外部 AI）→ sidecar 写盘。产物三件套：`clip.mp4` + `clip.json` + `clip_mask.png`。
 
 ## pick 底层链路（`web/`）
 
