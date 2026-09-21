@@ -33,13 +33,30 @@ def extract_segment(erp_frames, segment: Segment) -> np.ndarray:
     return np.stack(out)
 
 
+class _FfmpegWriter:
+    """Minimal write/release facade over FfmpegSink for the streaming loop."""
+
+    def __init__(self, path, fps, size):
+        from .media import FfmpegSink
+        self._sink = FfmpegSink(path, size, fps, crf=14)
+
+    def write(self, frame):
+        self._sink.write(frame)
+
+    def release(self):
+        self._sink.close()
+
+
 def open_writer(path, fps, size):
-    """Open an mp4 writer for streaming frames one at a time."""
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    vw = cv2.VideoWriter(path, fourcc, fps, size)
-    if not vw.isOpened():
-        raise RuntimeError(f"cannot open video writer for {path!r} at {size}")
-    return vw
+    """Open an mp4 writer for streaming frames one at a time.
+
+    libx264 crf14, not OpenCV's mp4v: this file is the AI tool's input, and a
+    lossy first generation should not be the softest link in the redraw chain
+    (measured 2026-09-21: mp4v 37.2 dB vs crf14 38.9 dB on viewport content).
+    crf14/preset medium matches restore's AI-facing encode. Needs the ffmpeg
+    binary (same prerequisite as merge).
+    """
+    return _FfmpegWriter(path, fps, size)
 
 
 def write_clip(frames, path, fps, progress=None):
