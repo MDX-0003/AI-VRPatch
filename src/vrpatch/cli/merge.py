@@ -26,6 +26,7 @@ from ..framealign import index_map, short_by
 from ..media import FfmpegSink, ffmpeg_path, has_audio
 from ..progress import Log, RateMeter, format_duration, open_log_file
 from ..restore import resolve_ai_clip
+from .. import scalefit
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -36,9 +37,11 @@ class AiFrameSource:
     Reads the source clip sequentially and keeps only the current frame; the
     target->source index map is monotonic (framealign.index_map), so each source
     frame is decoded at most once and only decoded frames are resized.
+    `correction` (optional 2x3, from scalefit) warps each frame onto the clip's
+    geometry before handing it out -- undoing the AI tool's global scale/shift.
     """
 
-    def __init__(self, path, target_size, dst_fps, n, log):
+    def __init__(self, path, target_size, dst_fps, n, log, correction=None):
         self.path = path
         self.target_size = target_size
         self.cap = cv2.VideoCapture(path)
@@ -55,11 +58,13 @@ class AiFrameSource:
         self._scaled = None
         self._scaled_i = -1
         self.short = short_by(n, self.src_n)
+        self.correction = None if correction is None else np.float32(correction)
 
         log.info(f"ai clip : {self.src_n} frames, {self.src_size[0]}x"
                  f"{self.src_size[1]} @ {self.src_fps:.2f}fps -> resample to "
                  f"{n} frames @ {dst_fps:.2f}fps, resize to "
-                 f"{target_size[0]}x{target_size[1]}")
+                 f"{target_size[0]}x{target_size[1]}"
+                 + (", scale-fit correction applied" if self.correction is not None else ""))
 
     def frame(self, i):
         want = int(self.idx[i])
@@ -75,6 +80,12 @@ class AiFrameSource:
             self._scaled = cv2.resize(self._raw, self.target_size,
                                       interpolation=cv2.INTER_AREA)
             self._scaled_i = self._raw_i
+        if self.correction is not None:
+            # warp fresh off the resize cache: frame() may be called twice for
+            # the same source frame (tail duplication) and must not double-warp
+            return cv2.warpAffine(self._scaled, self.correction,
+                                  self.target_size, flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_REFLECT)
         return self._scaled
 
     def close(self):
@@ -89,6 +100,12 @@ def merge(
     output: Path = typer.Option(..., help="output ERP mp4"),
     inner: str = typer.Option(None, metavar="X,Y,W,H",
                               help="override the sidecar inner rect"),
+    scale_fit: str = typer.Option("off", metavar="OFF|AUTO|JSON",
+                                  help="correct the AI clip's global scale/shift: "
+                                       "off | auto (fit the correction against the "
+                                       "source clip outside the inner rect, cached "
+                                       "next to the AI file) | path to a "
+                                       ".scalefit.json"),
     max_frames: int = typer.Option(0, help="stop after N frames (preview)"),
     snapshots: str = typer.Option("", help="comma-separated frame indices to save as PNG"),
     feather: int = typer.Option(16, help="inner-rect boundary feather width"),
@@ -111,6 +128,7 @@ def merge(
     # ---- 1. sidecar (single segment, loud) -----------------------------------
     log.phase(f"sidecar: {sidecar}")
     seg = load_sidecar_single_segment(sidecar)
+    inner_fit = seg.inner  # the version's rect: the region to avoid when fitting
     if inner:
         ix, iy, iw, ih = (int(v) for v in inner.split(","))
         if iw <= 0 or ih <= 0:
@@ -170,7 +188,18 @@ def merge(
                                            no_restore=no_restore, log=log)
     except FileNotFoundError as e:
         raise typer.Exit(str(e))
-    ai_src = AiFrameSource(use_ai, (vp.width, vp.height), sidecar_fps, n_seg, log)
+    correction = None
+    if scale_fit.strip().lower() != "off":
+        # fit against the version's viewport clip (the AI tool's input), never
+        # against the ERP source -- different geometry entirely
+        clip_ref = sidecar.with_name("clip.mp4")
+        fit = scalefit.resolve(clip_ref, use_ai, inner_fit,
+                               (vp.width, vp.height), seg.frame_start, n_seg,
+                               scale_fit.strip(), log=log)
+        if fit.applied:
+            correction = fit.matrix32()
+    ai_src = AiFrameSource(use_ai, (vp.width, vp.height), sidecar_fps, n_seg,
+                           log, correction=correction)
     if ai_src.short:
         log.info(f"WARNING: AI clip is {ai_src.short} frames short; the last "
                  f"decodable frame is reused to fill the gap.")
@@ -229,6 +258,8 @@ def merge(
             "input": str(input_video), "ai": str(ai), "sidecar": str(sidecar),
             "ai_clip_used": use_ai,
             "restore_mode": (restored or {}).get("mode"),
+            "scale_fit": (fit.to_dict() if scale_fit.strip().lower() != "off"
+                          else {"mode": "off"}),
             "output": str(output), "frames_written": written,
             "frames_expected": n, "encoder": "ffmpeg/libx264",
             "crf": crf, "preset": preset, "feather": feather, "levels": levels,

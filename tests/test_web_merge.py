@@ -75,6 +75,7 @@ def test_merge_uses_draft_inner(merge_env):
     argv = queue.argv
     i = argv.index("--inner")
     assert argv[i + 1] == "80,45,160,90"          # the DRAFT rect, not v1's 70,40,150,80
+    assert argv[argv.index("--scale-fit") + 1] == "auto"   # web forces the fit
     assert argv[argv.index("--report") + 1].endswith("out_v1.merge.json")
     sidecar = argv[argv.index("--sidecar") + 1]
     assert "v1" in sidecar and sidecar.endswith("clip.json")

@@ -373,6 +373,7 @@ async def api_merge(request):
             "--ai", ver["ai_clip"], "--sidecar", str(vdir / "clip.json"),
             "--output", str(out),
             "--inner", f"{inner.x},{inner.y},{inner.width},{inner.height}",
+            "--scale-fit", "auto",
             "--report", str(out.with_name(out.stem + ".merge.json"))]
     QUEUE.submit("merge", name, argv)
     return JSONResponse({"submitted": "merge", "case": name, "version": version,
