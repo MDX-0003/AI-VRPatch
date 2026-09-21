@@ -29,7 +29,8 @@ src/vrpatch/
 └── web/
     ├── app.py        dashboard 后端（REST API + 页面路由）
     ├── tasks.py      单任务队列：extract/merge 以 subprocess 跑 CLI，日志落 logs/ 供前端 tail
-    ├── render.py     选区预览渲染（源帧解码一次缓存 4K 副本，预览限宽 1024/960）
+    ├── render.py     视口预览渲染（ERP 侧由前端 <video> 原生解码零文件；按帧重投影 + JPEG 缓存；
+    │                 derived/pick 整体是可再生缓存：固定名 + 每次渲染 GC）
     └── templates/ + static/   服务端渲染 + 原生 JS（零 npm，轮询，无构建链）
 tests/                pytest；reference.py = 参考实现（回归门槛 4 的对比对象）
 tools/                独立脚本（视频比对、契约比对），不入包

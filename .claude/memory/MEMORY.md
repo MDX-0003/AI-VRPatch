@@ -1,6 +1,7 @@
 - [项目概览与布局](project-overview.md) — 功能、目录、单段与契约等硬性规则入口
 - [像素回归基线](pixel-baseline.md) — 编码参数是基线的一部分；回归不达 0 的判定顺序
 - [web pick 坐标契约](pick-coordinate-flow.md) — 提交用 0..1 分数、PickCoords 单一映射、改 JS 必递增 ?v=N
+- [选区逐帧走查与 pick 缓存](pick-frame-browsing.md) — ERP 走 <video> 零文件、视口按帧重投影；derived/pick 可再生有界
 - [拖拽 overlay 坐标铁律](js-drag-overlay-coords.md) — clientX 必须经 getBoundingClientRect 换算，禁与 offsetLeft 混算
 - [网页控制台架构](web-dashboard-architecture.md) — subprocess 跑 CLI、单任务队列、TOML 路径坑
 - [Extract 版本与配对](extract-version-pairing.md) — 选区是草稿、Extract 定版；merge 显式选版本，目录归属即配对

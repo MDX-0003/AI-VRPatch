@@ -41,10 +41,11 @@ case 模式：`case.load_case`（sha256 校验失败即拒）→ `VideoCapture` 
 
 ## pick 底层链路（`web/`）
 
-服务端渲染（starlette + jinja2，零 npm）。分辨率策略：源帧只解码一次、缓存 4K 工作副本；ERP 预览 1024 宽缩略图，视口预览按比例重投影 ≤960 宽——选区只需看位置，不做全量渲染。交互两条路：
-- ERP `input[type=image]` 点击 → POST `fx,fy`（[0,1) 归一化）→ 服务端换算 yaw/pitch（经度 = (fx-0.5)·360°，纬度 = (0.5-fy)·180°）；
-- 视口上 JS 拖拽画内圈矩形（纯 div overlay），**松手才 POST**，服务端按预览/全尺寸比例还原成视口像素坐标。
-两条路都落盘回写 `case.toml`（文本级、按 TOML 节定位的键覆写），并按内容哈希换key 重渲染预览。
+服务端渲染（starlette + jinja2，零 npm）。**ERP 侧零服务端渲染**：前端 `<video>` 经 `/sources` 静态路由（Range 请求）原生解码源视频——滑条/逐帧/播放都在浏览器完成，浏览全部帧零新增文件、零服务器解码。选区交互两条路：
+- ERP 点击 → `pick.js` 的 `PickCoords`（img/video 双支持，提交 0..1 分数）→ POST `fx,fy` → 服务端换算 yaw/pitch；红十字（视口中心）与绿框（footprint 粗估）是客户端 overlay div（纯分数算术，不含投影数学）；
+- 视口预览是 ERP→rectilinear 重投影，**不下放浏览器**（投影唯一权威）：`/img/{name}/vp.png?frame=N` 服务端解码该帧并重投影（8K 随机 seek ~1s/帧），结果 JPEG 缓存于 `derived/pick/vpframes/<视口几何key>/`；缓存 key 用视口几何、**特意不含 inner**（拖框不触发重投影），视口一动整目录失效并 GC。inner 拖拽松手才 POST 分数，服务端还原成视口像素坐标。
+
+`derived/pick/` 整体是**可再生缓存**：固定名 `vp.png`（当前帧 + inner overlay）+ 有界帧缓存（上界=源帧数），每次渲染顺带 GC 旧命名残留与旧几何目录，任何时候可整体删除。前端轮询带 infoSig 脏检查：case 信息没变就不碰 video/overlay/预览。
 
 ## case / sidecar 关系（`case.py`）
 
