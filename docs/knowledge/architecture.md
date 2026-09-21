@@ -43,7 +43,7 @@ case 模式：`case.load_case`（sha256 校验失败即拒）→ `VideoCapture` 
 
 服务端渲染（starlette + jinja2，零 npm）。**ERP 侧零服务端渲染**：前端 `<video>` 经 `/sources` 静态路由（Range 请求）原生解码源视频——滑条/逐帧/播放都在浏览器完成，浏览全部帧零新增文件、零服务器解码。选区交互两条路：
 - ERP 点击 → `pick.js` 的 `PickCoords`（img/video 双支持，提交 0..1 分数）→ POST `fx,fy` → 服务端换算 yaw/pitch；红十字（视口中心）与绿框（footprint 粗估）是客户端 overlay div（纯分数算术，不含投影数学）；
-- 视口预览是 ERP→rectilinear 重投影，**不下放浏览器**（投影唯一权威）：`/img/{name}/vp.png?frame=N` 服务端解码该帧并重投影（8K 随机 seek ~1s/帧），结果 JPEG 缓存于 `derived/pick/vpframes/<视口几何key>/`；缓存 key 用视口几何、**特意不含 inner**（拖框不触发重投影），视口一动整目录失效并 GC。inner 拖拽松手才 POST 分数，服务端还原成视口像素坐标。
+- 视口预览是 ERP→rectilinear 重投影，**不下放浏览器**（投影唯一权威）：`/img/{name}/vp.png?frame=N` 服务端渲染，三层缓存递进——解码后的 4K ERP 帧 RAM LRU（8 帧 ~200MB，与几何无关，视口移动后重投影 ~53ms）→ `vpframes/<视口几何key>/` JPEG（上界=源帧数，冷帧 8K 解码 ~1s）→ (几何,帧) memoize 的内存 PNG 响应。store 构造零解码（每次 case.toml 写盘都重建 store）；渲染进 `asyncio.to_thread` 不卡事件循环。缓存 key 用视口几何、**特意不含 inner**（拖框不触发重投影），视口一动整目录失效并 GC。inner 拖拽松手才 POST 分数，服务端还原成视口像素坐标。前端：◁▷ 步进 0ms debounce、滑条 150ms；预览落地后错峰预取 N±1，步进走温路径 ~0.2s。
 
 `derived/pick/` 整体是**可再生缓存**：固定名 `vp.png`（当前帧 + inner overlay）+ 有界帧缓存（上界=源帧数），每次渲染顺带 GC 旧命名残留与旧几何目录，任何时候可整体删除。前端轮询带 infoSig 脏检查：case 信息没变就不碰 video/overlay/预览。
 
