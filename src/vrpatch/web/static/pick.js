@@ -3,9 +3,9 @@
  *
  * Rule (see .claude/memory/js-drag-overlay-coords.md): every coordinate,
  * whether drawn on screen or submitted to the server, is derived from ONE
- * mapping: event -> img.getBoundingClientRect() -> two outputs. Never mix
- * clientX/Y with offsetLeft/offsetTop, and never use naturalWidth without
- * guarding for a not-yet-loaded image.
+ * mapping: event -> getBoundingClientRect() -> two outputs. Never mix
+ * clientX/Y with offsetLeft/offsetTop, and never use intrinsic dimensions
+ * (naturalWidth / videoWidth) without guarding for a not-yet-loaded element.
  *
  * Style-proof by construction:
  *  - overlay position is expressed relative to the image, then converted to
@@ -29,8 +29,17 @@
 window.PickCoords = (function () {
   "use strict";
 
-  function loaded(imgEl) {
-    return imgEl.complete && imgEl.naturalWidth > 0;
+  // works for <img> (naturalWidth) and <video> (videoWidth, readyState)
+  function loaded(el) {
+    return el.tagName === "VIDEO"
+      ? el.readyState >= 1
+      : el.complete && el.naturalWidth > 0;
+  }
+
+  function mediaSize(el) {
+    if (el.tagName === "VIDEO")
+      return el.videoWidth > 0 ? { w: el.videoWidth, h: el.videoHeight } : null;
+    return el.naturalWidth > 0 ? { w: el.naturalWidth, h: el.naturalHeight } : null;
   }
 
   // event -> coords in CSS space, image pixel space and 0..1 fractions, or null
@@ -38,8 +47,9 @@ window.PickCoords = (function () {
     if (!loaded(imgEl)) return null;
     const r = imgEl.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return null;
-    const sx = imgEl.naturalWidth / r.width;
-    const sy = imgEl.naturalHeight / r.height;
+    const d = mediaSize(imgEl);
+    if (!d) return null;
+    const sx = d.w / r.width, sy = d.h / r.height;
     const cssX = e.clientX - r.left, cssY = e.clientY - r.top;
     return {
       css: { x: cssX, y: cssY },

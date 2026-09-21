@@ -4,6 +4,9 @@
 "use strict";
 let SEL = null;                 // selected case name
 let vpDrag = null;              // PickCoords drag controller for the viewport
+let CUR = null;                 // last fetched case info (drives media + overlays)
+const scrub = { frame: 0, count: 0, fps: 30 };
+let vpTimer = null;             // debounce for the per-frame viewport preview
 
 const $ = (id) => document.getElementById(id);
 
@@ -56,6 +59,12 @@ async function createCase() {
 
 // ---- case detail -------------------------------------------------------
 
+function infoSig(c) {
+  // what media/preview refreshes depend on — idle polls must not touch them
+  return JSON.stringify([c.viewport, c.inner, c.extracted, c.extract_version,
+                         c.versions, c.source_frames, c.fps, c.source_url]);
+}
+
 async function selectCase(name) {
   if (vpDrag) vpDrag.cancel();      // never leave a drag in flight across cases
   SEL = name;
@@ -65,11 +74,8 @@ async function selectCase(name) {
 
 async function refreshCase() {
   if (!SEL || (vpDrag && vpDrag.active)) return;   // no image swaps mid-drag
-  if (!SEL) return;
   const c = await api("/api/case/" + SEL);
   $("caseName").textContent = c.name;
-  $("erpImg").src = c.previews.erp + "&t=" + Date.now();
-  $("vpImg").src = c.previews.vp + "&t=" + Date.now();
   $("vpMeta").textContent = `yaw ${c.viewport.yaw}  pitch ${c.viewport.pitch}  fov ${c.viewport.fov}  窗口 ${c.viewport.size}`;
   $("inMeta").textContent = `inner ${c.inner.x},${c.inner.y},${c.inner.w},${c.inner.h}`;
   $("exSt").textContent = c.extracted ? "✓ 已生成 clip.mp4 + 掩膜" : "";
@@ -90,7 +96,121 @@ async function refreshCase() {
     verSel.value = c.versions[c.versions.length - 1].version;
   updatePipeline(c);
   $("innerBox").style.display = "none";            // committed: hide the live box
+  const changed = !CUR || CUR.name !== c.name || infoSig(CUR) !== infoSig(c);
+  CUR = c;
+  if (!changed) return;          // idle poll: leave video/overlays/previews alone
+  setVideoCase(c);
+  drawErpOverlays();
+  refreshVp();
 }
+
+// ---- ERP video + frame scrubber -----------------------------------------
+// The ERP pane is a native <video>: scrubbing decodes in the browser, so
+// browsing all frames costs zero server work and zero files. Only the
+// viewport pane (reprojection) needs the server, per current frame.
+
+function setVideoCase(c) {
+  const v = $("erpVid");
+  scrub.count = c.source_frames || 0;
+  scrub.fps = c.fps || 30;
+  $("frameSlider").max = Math.max(0, scrub.count - 1);
+  if (v.dataset.case !== c.name) {       // case switch: reload, reset position
+    v.dataset.case = c.name;
+    v.src = c.source_url;
+    scrub.frame = 0;
+    $("frameSlider").value = 0;
+    updateFrameLabel();
+  } else {
+    scrub.frame = Math.min(scrub.frame, Math.max(0, scrub.count - 1));
+  }
+}
+
+function updateFrameLabel() {
+  $("frameLabel").textContent = `${scrub.frame}/${scrub.count}`;
+}
+
+function gotoFrame(n) {
+  scrub.frame = Math.max(0, Math.min(scrub.count - 1, n));
+  $("frameSlider").value = scrub.frame;
+  updateFrameLabel();
+  const v = $("erpVid");
+  if (scrub.count > 0 && v.readyState >= 1)
+    v.currentTime = scrub.frame / scrub.fps;   // fires 'seeked' -> vp refresh
+}
+
+// ERP overlays mirror what render.py used to bake in: a red cross at the
+// viewport centre and the rough footprint box (fov fraction x viewport
+// aspect). Pure display arithmetic on case fractions — no projection math
+// lives client-side.
+function drawErpOverlays() {
+  if (!CUR) return;
+  const v = $("erpVid");
+  if (v.readyState < 1) return;
+  const r = v.getBoundingClientRect();
+  if (r.width === 0) return;
+  const vp = CUR.viewport;
+  const cx = (0.5 + vp.yaw / 360) * r.width;
+  const cy = (0.5 - vp.pitch / 180) * r.height;
+  const fw = (vp.fov / 360) * r.width;
+  const fh = fw * vp.size[1] / vp.size[0];
+  PickCoords.drawOverlay($("vpFoot"), v,
+    { x: cx - fw / 2, y: cy - fh / 2, w: fw, h: fh });
+  const cross = $("vpCross");
+  const ob = (cross.offsetParent || document.body).getBoundingClientRect();
+  cross.style.left = (r.left - ob.left + cx) + "px";
+  cross.style.top = (r.top - ob.top + cy) + "px";
+  cross.style.display = "block";
+}
+
+// viewport preview follows the scrub frame (server-side reprojection, ~1s
+// uncached on 8K); frame 0 maps to the no-param fast path (startup base)
+function refreshVp() {
+  if (!CUR) return;
+  const f = scrub.frame > 0 ? `&frame=${scrub.frame}` : "";
+  $("vpImg").src = `${CUR.previews.vp}${f}&t=${Date.now()}`;
+}
+
+function scheduleVpRefresh(delay = 350) {
+  clearTimeout(vpTimer);
+  vpTimer = setTimeout(() => {
+    vpTimer = null;
+    if (SEL && !(vpDrag && vpDrag.active)) refreshVp();
+  }, delay);
+}
+
+{
+  const v = $("erpVid");
+  v.addEventListener("loadedmetadata", () => {
+    if (scrub.frame > 0) v.currentTime = scrub.frame / scrub.fps;
+    drawErpOverlays();
+  });
+  v.addEventListener("seeked", () => {
+    if (scrub.count > 0) scrub.frame = Math.round(v.currentTime * scrub.fps);
+    $("frameSlider").value = scrub.frame;
+    updateFrameLabel();
+    scheduleVpRefresh();
+  });
+  v.addEventListener("timeupdate", () => {
+    if (v.paused) return;              // seeks handled by 'seeked'
+    scrub.frame = Math.round(v.currentTime * scrub.fps);
+    $("frameSlider").value = scrub.frame;
+    updateFrameLabel();
+  });
+  v.addEventListener("play", () => { $("btnPlay").textContent = "⏸"; });
+  v.addEventListener("pause", () => {
+    $("btnPlay").textContent = "▶";
+    scheduleVpRefresh(0);              // settle on the frame where we stopped
+  });
+  $("btnPlay").onclick = () => {
+    if (!v.src) return;
+    if (v.paused) v.play(); else v.pause();
+  };
+  $("btnPrev").onclick = () => gotoFrame(scrub.frame - 1);
+  $("btnNext").onclick = () => gotoFrame(scrub.frame + 1);
+  $("frameSlider").addEventListener("input",
+    (e) => gotoFrame(parseInt(e.target.value, 10)));
+}
+window.addEventListener("resize", drawErpOverlays);
 
 // pipeline badges reflect the SELECTED extract version
 async function updatePipeline(c) {
@@ -109,8 +229,8 @@ async function updatePipeline(c) {
 // ERP click: viewport centre follows the click, via the single mapping.
 async function erpClick(ev) {
   if (!SEL) return;
-  const p = PickCoords.point($("erpImg"), ev);
-  if (!p) return;                    // preview not loaded yet: ignore click
+  const p = PickCoords.point($("erpVid"), ev);
+  if (!p) return;                    // video metadata not ready: ignore click
   await postGeometry("viewport", { fx: p.frac.x, fy: p.frac.y });
 }
 
