@@ -45,50 +45,51 @@ def store(tmp_path):
     return PreviewStore(str(tmp_path / "case.toml"))
 
 
-def test_fixed_names_and_gc_of_legacy_keyed_files(store):
+def test_gc_of_legacy_preview_files(store):
     pick = store.dir
-    legacy1 = pick / "erp_078337921b.png"
-    legacy2 = pick / "vp_078337921b.png"
-    legacy3 = pick / "erp.png"      # fixed name of the removed ERP preview
-    legacy1.write_bytes(b"x")
-    legacy2.write_bytes(b"x")
-    legacy3.write_bytes(b"x")
-    assert store.viewport_png() == pick / "vp.png"
-    assert (pick / "vp.png").is_file()
-    assert not legacy1.exists() and not legacy2.exists() and not legacy3.exists()
-    assert sorted(p.name for p in pick.iterdir()) == ["vp.png"]
+    legacy = [pick / "erp_078337921b.png", pick / "vp_078337921b.png",
+              pick / "erp.png", pick / "vp.png", pick / "vp_000003.jpg.tmp"]
+    for p in legacy:
+        p.write_bytes(b"x")
+    data = store.viewport_png()                # composes in memory, GCs the rest
+    assert isinstance(data, bytes) and len(data) > 1000
+    assert all(not p.exists() for p in legacy)
+    assert sorted(p.name for p in pick.iterdir()) == []
 
 
-def test_geometry_change_rewrites_same_file(store):
-    pick = store.dir
-    store.viewport_png()
-    first = (pick / "vp.png").read_bytes()
-    store.set_inner(10, 10, 100, 80)          # new content key, same path
-    assert store.viewport_png() == pick / "vp.png"
-    assert (pick / "vp.png").read_bytes() != first
-    # the old keyed scheme would have left vp_<newkey>.png behind
-    assert sorted(p.name for p in pick.iterdir()) == ["vp.png"]
+def test_geometry_change_changes_preview_bytes(store):
+    first = store.viewport_png()
+    store.set_inner(10, 10, 100, 80)           # new content key, overlay moves
+    assert store.viewport_png() != first
 
 
-def test_unchanged_geometry_does_not_rewrite(store):
-    p = store.viewport_png()
-    before = p.stat().st_mtime_ns
-    store.viewport_png()
-    assert p.stat().st_mtime_ns == before
+def test_unchanged_geometry_memoizes_bytes(store):
+    first = store.viewport_png()
+    assert store.viewport_png() is first       # same memoized object, no redraw
 
 
 def test_frame_preview_cache(store):
-    p3 = store.viewport_png(frame=3)
-    p5 = store.viewport_png(frame=5)
-    geo = store.dir / "vpframes" / store._vp_geo_key()
-    jpg3, jpg5 = geo / "vp_000003.jpg", geo / "vp_000005.jpg"
+    jpg3 = store.dir / "vpframes" / store._vp_geo_key() / "vp_000003.jpg"
+    jpg5 = store.dir / "vpframes" / store._vp_geo_key() / "vp_000005.jpg"
+    b3 = store.viewport_png(frame=3)
+    b3b = store.viewport_png(frame=3)
+    b5 = store.viewport_png(frame=5)
     assert jpg3.is_file() and jpg5.is_file()
     assert jpg3.read_bytes() != jpg5.read_bytes()   # moving content differs
-    m0 = jpg3.stat().st_mtime_ns
-    assert store.viewport_png(frame=3) == p3        # cached: same file
-    assert jpg3.stat().st_mtime_ns == m0            # ...not rewritten
-    # the response image carries the inner overlay, the cache does not
-    assert p3.read_bytes() != jpg3.read_bytes()
+    assert b3 is b3b                                # memoized for (key, frame)
+    assert b3 != b5
+    # the response carries the inner overlay; the cache file does not
+    assert b3 != jpg3.read_bytes()
+
+
+def test_inner_drag_keeps_frame_cache_but_changes_preview(store):
+    store.viewport_png(frame=3)
+    jpg = store.dir / "vpframes" / store._vp_geo_key() / "vp_000003.jpg"
+    m0 = jpg.stat().st_mtime_ns
+    before = store.viewport_png(frame=3)
+    store.set_inner(10, 10, 100, 80)     # frequent: must not re-reproject...
+    assert jpg.stat().st_mtime_ns == m0
+    assert store.viewport_png(frame=3) != before   # ...but the overlay moves
 
 
 def test_frame_cache_invalidated_by_viewport_move(store):
@@ -101,15 +102,6 @@ def test_frame_cache_invalidated_by_viewport_move(store):
     vpf = store.dir / "vpframes"
     assert [d.name for d in vpf.iterdir()] == [store._vp_geo_key()]
     assert not old_jpg.exists()
-
-
-def test_inner_drag_keeps_frame_cache(store):
-    store.viewport_png(frame=3)
-    jpg = store.dir / "vpframes" / store._vp_geo_key() / "vp_000003.jpg"
-    m0 = jpg.stat().st_mtime_ns
-    store.set_inner(10, 10, 100, 80)                # frequent: must not re-reproject
-    store.viewport_png(frame=3)
-    assert jpg.stat().st_mtime_ns == m0
 
 
 def test_frame_out_of_range(store):
@@ -143,8 +135,9 @@ def test_img_route_frame_param(tmp_path, monkeypatch):
     webapp = _route_env(tmp_path, monkeypatch)
     ok = asyncio.run(webapp.img(_ImgRequest("t", "vp.png", {"frame": "2"})))
     assert ok.status_code == 200
+    assert ok.body and len(ok.body) > 1000          # PNG bytes, not a file ref
     plain = asyncio.run(webapp.img(_ImgRequest("t", "vp.png")))
-    assert plain.status_code == 200
+    assert plain.status_code == 200 and plain.body
     for bad in ({"frame": "9999"}, {"frame": "-1"}, {"frame": "abc"}):
         r = asyncio.run(webapp.img(_ImgRequest("t", "vp.png", bad)))
         assert r.status_code == 400, bad

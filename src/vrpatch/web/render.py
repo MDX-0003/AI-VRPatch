@@ -7,16 +7,17 @@ math has one authority). Resolution policy: the startup frame is decoded once
 and kept at MEDIUM_W (4K) for the default preview; any other frame is decoded
 on demand (~1s on 8K) and cached as a JPEG under derived/pick/vpframes/.
 
-The directory is a *regenerable cache*: safe to delete at any time, and kept
-bounded — each render drops leftover files from older schemes (content-keyed
-names) and stale viewport-geometry cache dirs, so it never grows beyond
-vp.png plus per-frame JPEGs bounded by the source frame count.
+The preview response is composed in memory (no shared file to rewrite under a
+streaming reader — that once produced torn downloads). derived/pick/ itself
+is a *regenerable cache*: per-frame JPEGs bounded by the source frame count,
+each render drops leftovers from older schemes; safe to delete at any time.
 """
 
 from __future__ import annotations
 
 import hashlib
 import shutil
+import threading
 from pathlib import Path
 
 import cv2
@@ -58,9 +59,9 @@ class PreviewStore:
         self.med_w = self._med.shape[1]
         self.med_h = self._med.shape[0]
         self.key = self._new_key()
-        # fixed filename vp.png is safe because re-render is keyed on
-        # (geometry key, frame) — file existence alone would serve stale pictures
-        self._rendered: dict[str, tuple] = {}
+        # memoized (geometry, frame) -> preview PNG bytes; the response never
+        # touches a shared file (see viewport_png)
+        self._vp_bytes: tuple | None = None
 
     def _medium_of(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -89,14 +90,16 @@ class PreviewStore:
 
     # ---- previews (cheap: overlay on cached bases) ---------------------------
 
-    def viewport_png(self, frame: int | None = None) -> Path:
-        """Viewport preview with the inner overlay. frame=None reprojects from
-        the cached startup frame (fast default); frame=N decodes that source
-        frame (~0.5s on 8K) through the reprojection cache in vpframes/."""
-        out = self.dir / "vp.png"
+    def viewport_png(self, frame: int | None = None) -> bytes:
+        """PNG bytes of the viewport preview: the frame reprojection with the
+        inner overlay drawn on. Composed in memory and memoized by (geometry,
+        frame) — a shared vp.png file got rewritten under concurrent responses
+        and served torn downloads. frame=None reprojects the cached startup
+        frame (fast default); frame=N decodes that source frame (~1s on 8K)
+        through the vpframes/ JPEG cache."""
         stamp = (self.key, frame)
-        if out.exists() and self._rendered.get("vp") == stamp:
-            return out
+        if self._vp_bytes and self._vp_bytes[0] == stamp:
+            return self._vp_bytes[1]
         if frame is None:
             view = self._reproject(self._med)
         else:
@@ -105,15 +108,20 @@ class PreviewStore:
             if view is None:
                 raise RuntimeError(f"frame cache unreadable: {cached}")
         self._draw_inner(view)
-        cv2.imwrite(str(out), view)
-        self._rendered["vp"] = stamp
+        ok, buf = cv2.imencode(".png", view)
+        if not ok:
+            raise RuntimeError("viewport preview PNG encode failed")
+        data = buf.tobytes()
+        self._vp_bytes = (stamp, data)
         self._gc()
-        return out
+        return data
 
     def viewport_frame_path(self, frame: int) -> Path:
         """Clean reprojection of one source frame (NO overlay: geometry moves
         must not invalidate these). Bounded by the frame count; invalidated
-        per viewport geometry via the vpframes/<geo key>/ layout."""
+        per viewport geometry via the vpframes/<geo key>/ layout. Written
+        once, atomically (unique temp name + replace), so a concurrent reader
+        never sees a half-written JPEG."""
         if not 0 <= frame < self.frame_count:
             raise ValueError(f"frame {frame} out of range 0..{self.frame_count - 1}")
         d = self.dir / "vpframes" / self._vp_geo_key()
@@ -121,7 +129,9 @@ class PreviewStore:
         if not out.exists():
             view = self._reproject(self._medium_of(_read_frame(self._video(), frame)))
             d.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(out), view, [cv2.IMWRITE_JPEG_QUALITY, FRAME_JPEG_Q])
+            tmp = d / f"{out.stem}.{threading.get_ident()}.tmp.jpg"
+            cv2.imwrite(str(tmp), view, [cv2.IMWRITE_JPEG_QUALITY, FRAME_JPEG_Q])
+            tmp.replace(out)
         return out
 
     def _reproject(self, med: np.ndarray) -> np.ndarray:
@@ -145,16 +155,20 @@ class PreviewStore:
     def _gc(self):
         """Keep derived/pick bounded: this directory is a regenerable cache,
         so anything in the preview namespace we did not just write is deleted
-        — leftovers from the older content-keyed names, and vpframes dirs of
-        older viewport geometries."""
-        for legacy in (*self.dir.glob("erp_*.png"), *self.dir.glob("vp_*.png")):
+        — leftovers from the older content-keyed / fixed-name schemes, temp
+        files, and vpframes dirs of older viewport geometries."""
+        for legacy in (*self.dir.glob("erp_*.png"), *self.dir.glob("vp_*.png"),
+                       *self.dir.glob("*.tmp"), *self.dir.glob("*.tmp.jpg")):
             legacy.unlink(missing_ok=True)
-        (self.dir / "erp.png").unlink(missing_ok=True)  # removed: ERP pane is a <video> now
+        for name in ("erp.png", "vp.png"):   # removed fixed-name previews
+            (self.dir / name).unlink(missing_ok=True)
         vpf = self.dir / "vpframes"
         if vpf.is_dir():
             for d in vpf.iterdir():
                 if d.is_dir() and d.name != self._vp_geo_key():
                     shutil.rmtree(d, ignore_errors=True)
+                elif d.is_file() and d.name.endswith(".tmp.jpg"):
+                    d.unlink(missing_ok=True)
 
     # ---- state updates -------------------------------------------------------
 

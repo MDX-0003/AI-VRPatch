@@ -282,13 +282,14 @@ function updateJoystickMeta(r) {
 
 document.querySelectorAll(".jb").forEach((btn) => {
   const dy = parseFloat(btn.dataset.dy), dp = parseFloat(btn.dataset.dp);
-  const start = async (e) => {
+  // arm/disarm the interval SYNCHRONOUSLY: awaiting the first nudge response
+  // before arming left a window where mouseup's stop() ran too early and the
+  // interval leaked (yaw/pitch drifting forever after a single click)
+  const start = (e) => {
     if (!SEL || joyTimer) return;
     e.preventDefault();
-    updateJoystickMeta(await nudgeOnce(dy, dp));
-    joyTimer = setInterval(async () => {
-      updateJoystickMeta(await nudgeOnce(dy, dp));
-    }, 100);
+    joyTimer = setInterval(() => nudgeOnce(dy, dp).then(updateJoystickMeta), 100);
+    nudgeOnce(dy, dp).then(updateJoystickMeta);
   };
   const stop = () => {
     if (!joyTimer) return;

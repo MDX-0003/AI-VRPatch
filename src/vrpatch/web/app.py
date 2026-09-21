@@ -12,6 +12,7 @@ Localhost, single user: the file browser is unrestricted on purpose.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -19,7 +20,8 @@ from pathlib import Path
 import cv2
 import jinja2
 from starlette.applications import Starlette
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import (FileResponse, HTMLResponse, JSONResponse,
+                                 RedirectResponse, Response)
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
@@ -105,10 +107,13 @@ async def img(request):
             return JSONResponse({"error": "frame must be an integer"},
                                 status_code=400)
     try:
-        p = store.viewport_png(frame)
+        # to_thread: an 8K decode+reprojection must not freeze the event loop,
+        # or every concurrent request (nudge, polling) queues behind it
+        data = await asyncio.to_thread(store.viewport_png, frame)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    return FileResponse(p)
+    # bytes, not a file: nothing shared can be rewritten mid-download
+    return Response(content=data, media_type="image/png")
 
 
 # ---- case api ----------------------------------------------------------
@@ -174,7 +179,8 @@ def _case_info(name: str) -> dict | None:
 async def api_cases(request):
     if request.method == "GET":
         names = sorted(p.parent.name for p in cases_dir().glob("*/case.toml"))
-        return JSONResponse([_case_info(n) for n in names])
+        infos = await asyncio.to_thread(lambda: [_case_info(n) for n in names])
+        return JSONResponse(infos)
 
     # POST: create a case from a video already inside sources/
     body = await request.json()
@@ -219,7 +225,7 @@ async def api_cases(request):
 
 async def api_case(request):
     name = request.path_params["name"]
-    info = _case_info(name)
+    info = await asyncio.to_thread(_case_info, name)
     if info is None:
         return JSONResponse({"error": "no such case"}, status_code=404)
     return JSONResponse(info)
