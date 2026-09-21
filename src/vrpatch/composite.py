@@ -53,8 +53,11 @@ class SegmentMaps:
         orig_view = remap_viewport(erp_frame, self.view_map)
         blended = multiband_blend(orig_view, ai_frame, self.mask, levels)
 
+        # INTER_CUBIC: the paste is a x~0.7 downscale (canvas > footprint) where
+        # bilinear drops samples; policy documented in verification.md, kept in
+        # lockstep with projection.rect_to_erp_bbox (gate 4 reference)
         patch = cv2.remap(blended, self.paste_map[0], self.paste_map[1],
-                          cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+                          cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT)
 
         out = erp_frame.copy()
         sub = out[self.y0:self.y0 + patch.shape[0],

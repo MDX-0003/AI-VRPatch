@@ -162,7 +162,11 @@ def rect_to_erp_bbox(rect, yaw, pitch, fov, erp_w, erp_h):
     """
     u, v, cover, x0, y0 = build_paste_map_raw(yaw, pitch, fov, rect.shape[1],
                                               rect.shape[0], erp_w, erp_h)
-    patch = cv2.remap(rect.astype(np.float32), u, v, cv2.INTER_LINEAR,
+    # INTER_CUBIC: the paste is always a downscale (viewport canvas is larger
+    # than its ERP footprint), where bilinear drops samples; this is a
+    # documented quality decision (2026-09-21), kept in lockstep with the
+    # product remap in composite.py so gate 4 stays maxdiff==0
+    patch = cv2.remap(rect.astype(np.float32), u, v, cv2.INTER_CUBIC,
                       borderMode=cv2.BORDER_CONSTANT)
     return patch, cover, x0, y0
 
