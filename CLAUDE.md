@@ -46,7 +46,7 @@ docs/                 分层文档（见 docs/README.md）
 6. **编码参数（libx264 crf/preset、bgr24 rawvideo、两遍音频 mux）是基线的一部分**：改动即破坏门槛 2，必须重立基线并记录。
 7. 派生产物（`cases/*/derived/`、`logs/`、`sources/`、`*.mp4`、`debug_*.png`）不入 git；`case.toml` 必须记录源文件 sha256，且加载时校验。
 8. **web 与 CLI 共享同一条执行路径**：网页后台任务以 subprocess 调 `python -m vrpatch.cli.*`，不复制流水线逻辑；`case.toml` 是唯一真源，web 只写它 + 触发 CLI。
-9. **选区=草稿，Extract=定版**：每次 extract 写入不可变的 `extracts/<时间戳>/` 并记录几何指纹（clip.json sha256）；`[ai_clip]` 注册时绑定版本+指纹；merge 校验指纹，不一致拒绝（`--force` 跳过）。禁止让 merge 默认使用与 AI 产物不配对的几何。
+9. **选区=草稿，Extract=定版**：每次 extract 写入不可变的 `extracts/<时间戳>/`；AI 结果按版本注册（该目录内 `ai_clip.json` 标记）——目录归属即配对，无指纹机制。merge 几何（视口/帧范围/fps）只读所选版本的 clip.json；融合框 inner 是唯一例外：网页 merge 实时取当前草稿 inner（`--inner` 传入），且以「草稿视口==版本视口」为守卫（`case.viewports_match`），不一致拒绝。
 
 ## 代码规范
 

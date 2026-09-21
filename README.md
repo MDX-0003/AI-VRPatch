@@ -24,7 +24,7 @@
 
 **AI 产物帧率不一致？Merge 会自动对齐（Restore）**：外部 AI 工具常输出 24fps，甚至比原段少一小截。Merge 前会自动把 AI 产物补帧/拉伸到与原段**帧数、帧率完全一致**（`<AI文件名>_aligned.mp4`，放在 AI 产物旁边，已对齐则直接复用），不再出现"结尾定格 1/3 秒"这类隐式补齐。这需要本机有 [rife-ncnn-vulkan](https://github.com/nihui/rife-ncnn-vulkan)（免 Python 依赖的预编译 exe，Vulkan 直驱任意显卡）：下载 release zip 解压到项目根 `bin/` 即可（1080p 590 帧约 1 分钟，RTX 5080 实测 72s）。没装也能跑 merge——会告警并退回旧的"重采样+末帧补齐"行为。也可单独执行：`vrpatch-restore --ai <AI结果> --sidecar <clip.json>`。
 
-**选区是草稿，Extract 生成版本**：网页上拖框、点选随时可改、可反悔，只影响预览；每次点 Extract 生成一个独立版本目录 `cases/<案例>/extracts/<时间戳>/`（clip.mp4 / clip.json / 掩膜），互不覆盖。每个版本可独立"选入 AI 结果"（在该目录记录 ai_clip 路径标记）；**Merge 时选一个版本**，就用那一版的 clip.json 和 AI 结果合并，成品为 `derived/out_<版本>.mp4`——导出后再怎么改选区、或选择合并旧版本，都由你显式决定，不存在隐式错位。
+**选区是草稿，Extract 生成版本**：网页上拖框、点选随时可改、可反悔，只影响预览；每次点 Extract 生成一个独立版本目录 `cases/<案例>/extracts/<时间戳>/`（clip.mp4 / clip.json / 掩膜），互不覆盖。每个版本可独立"选入 AI 结果"（在该目录记录 ai_clip 路径标记）；**Merge 时选一个版本**，就用那一版的 clip.json 和 AI 结果合并，成品为 `derived/out_<版本>.mp4`——导出后再怎么改选区、或选择合并旧版本，都由你显式决定，不存在隐式错位。融合框（inner）例外地取**当前草稿**：合并前在网页上重新拖框即生效，无需重跑 Extract（`out_<版本>.merge.json` 记录每次实际用的框）；若视口 yaw/pitch/fov 在导出后被移动过，合并会提示先重置选区。
 
 ## 快速上手
 

@@ -23,7 +23,7 @@ ERP video ──vrpatch-merge──> 贴回后的 360 视频
 
 ## merge 底层链路（`cli/merge.py`）
 
-1. **sidecar 解析**：`case.load_sidecar_single_segment` 解析并强制单段（R5 守卫）；`--inner` 可覆盖内圈。
+1. **sidecar 解析**：`case.load_sidecar_single_segment` 解析并强制单段（R5 守卫）；`--inner` 可覆盖内圈。网页 merge 恒传当前草稿 inner 作为 `--inner`（融合框是活的创作参数，挪框不必重跑 extract），前置守卫「草稿视口==版本视口」（`case.viewports_match`，yaw 循环比较、半步摇杆容差），不一致拒绝；不传时仍用版本记录值。
 2. **源视频探测**：分辨率/帧数与 sidecar 不符时告警并以源为准；`--max-frames` 只缩短写入帧数（预览），不改变 AI 对齐帧数 `n_seg`。
 3. **几何预计算**：`composite.SegmentMaps` 每段构建一次——视口采样图（`build_view_map`）、footprint bbox 内的逆投影贴回图（`build_paste_map`）、羽化内圈掩膜。8K 下这一步 ~0.2s，换来每帧不再重建 (H,W,3) 射线网格。
 4. **AI clip 对齐**：先经 `restore.resolve_ai_clip`（见下节）拿到满足精确时间契约的 clip，`AiFrameSource` 再顺序解码，`framealign.index_map` 产出目标→源帧号映射（单调，源帧至多解码一次，只 resize 用到的帧）；契约已被 restore 满足时 index_map 是恒等映射，尾帧重复只作为缺失二进制时的降级路径。
