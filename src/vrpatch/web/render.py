@@ -8,8 +8,11 @@ reprojection from the medium ERP (geometry scales linearly, so this is the
 same picture at reduced resolution). A refresh redraws overlays on these
 cached bases — milliseconds, not seconds.
 
-Previews are written under <case dir>/derived/pick/ with a content key so
-stale images are never served.
+Previews are written under <case dir>/derived/pick/ under two fixed names
+(erp.png / vp.png). The directory is a *regenerable cache*: safe to delete at
+any time, and kept bounded — each render drops leftover files from older
+schemes (content-keyed names), so the directory never grows beyond the fixed
+previews plus explicitly bounded subdirectories.
 """
 
 from __future__ import annotations
@@ -60,6 +63,10 @@ class PreviewStore:
         self._erp_small = cv2.resize(self._med, (ERP_PREVIEW_W, ERP_PREVIEW_W // 2),
                                      interpolation=cv2.INTER_AREA)
         self.key = self._new_key()
+        # output name -> content key the file on disk was drawn for; fixed
+        # filenames are safe because re-render is keyed on this, not on
+        # file existence (which would serve a stale picture after a move)
+        self._rendered: dict[str, str] = {}
 
     def _video(self) -> str:
         p = Path(self.case.source.path)
@@ -77,42 +84,60 @@ class PreviewStore:
     # ---- previews (cheap: overlay on cached bases) ---------------------------
 
     def erp_png(self) -> Path:
-        out = self.dir / f"erp_{self.key}.png"
-        if not out.exists():
-            small = self._erp_small.copy()
-            w, h = small.shape[1], small.shape[0]
-            d = camera_rotation(np.radians(self.case.viewport.yaw_deg),
-                                np.radians(self.case.viewport.pitch_deg))[:, 2]
-            px, py = _direction_to_erp_px(d[None, :], w, h)
-            cx, cy = int(round(px[0])), int(round(py[0]))
-            cv2.drawMarker(small, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 24, 2)
-            # rough viewport footprint: fov as fraction of 360, 16:9-ish aspect
-            fw = int(w * self.case.viewport.fov_h_deg / 360.0)
-            fh = int(fw * self.case.viewport.height / self.case.viewport.width)
-            cv2.rectangle(small, (cx - fw // 2, cy - fh // 2),
-                          (cx + fw // 2, cy + fh // 2), (0, 255, 0), 1)
-            cv2.imwrite(str(out), small)
+        out = self.dir / "erp.png"
+        self._render("erp", out, self._draw_erp)
         return out
 
     def viewport_png(self) -> Path:
-        out = self.dir / f"vp_{self.key}.png"
-        if not out.exists():
-            vp = self.case.viewport
-            scale = min(VIEWPORT_PREVIEW_W / vp.width, 1.0)
-            vw, vh = int(round(vp.width * scale)), int(round(vp.height * scale))
-            # reproject from the medium ERP, proportionally sized — same
-            # geometry, a fraction of the pixels
-            view = erp_to_rect(self._med, np.radians(vp.yaw_deg),
-                               np.radians(vp.pitch_deg),
-                               np.radians(vp.fov_h_deg), vw, vh)
-            inner = self.case.inner
-            cv2.rectangle(view,
-                          (int(inner.x * scale), int(inner.y * scale)),
-                          (int((inner.x + inner.width) * scale),
-                           int((inner.y + inner.height) * scale)),
-                          (0, 0, 255), 2)
-            cv2.imwrite(str(out), view)
+        out = self.dir / "vp.png"
+        self._render("vp", out, self._draw_vp)
         return out
+
+    def _render(self, name: str, out: Path, draw) -> None:
+        if out.exists() and self._rendered.get(name) == self.key:
+            return
+        draw(out)
+        self._rendered[name] = self.key
+        self._gc()
+
+    def _gc(self):
+        """Keep derived/pick bounded: this directory is a regenerable cache,
+        so any file in the preview namespace we did not just write (leftovers
+        from the older content-keyed names) is deleted on every render."""
+        for legacy in (*self.dir.glob("erp_*.png"), *self.dir.glob("vp_*.png")):
+            legacy.unlink(missing_ok=True)
+
+    def _draw_erp(self, out: Path):
+        small = self._erp_small.copy()
+        w, h = small.shape[1], small.shape[0]
+        d = camera_rotation(np.radians(self.case.viewport.yaw_deg),
+                            np.radians(self.case.viewport.pitch_deg))[:, 2]
+        px, py = _direction_to_erp_px(d[None, :], w, h)
+        cx, cy = int(round(px[0])), int(round(py[0]))
+        cv2.drawMarker(small, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 24, 2)
+        # rough viewport footprint: fov as fraction of 360, 16:9-ish aspect
+        fw = int(w * self.case.viewport.fov_h_deg / 360.0)
+        fh = int(fw * self.case.viewport.height / self.case.viewport.width)
+        cv2.rectangle(small, (cx - fw // 2, cy - fh // 2),
+                      (cx + fw // 2, cy + fh // 2), (0, 255, 0), 1)
+        cv2.imwrite(str(out), small)
+
+    def _draw_vp(self, out: Path):
+        vp = self.case.viewport
+        scale = min(VIEWPORT_PREVIEW_W / vp.width, 1.0)
+        vw, vh = int(round(vp.width * scale)), int(round(vp.height * scale))
+        # reproject from the medium ERP, proportionally sized — same
+        # geometry, a fraction of the pixels
+        view = erp_to_rect(self._med, np.radians(vp.yaw_deg),
+                           np.radians(vp.pitch_deg),
+                           np.radians(vp.fov_h_deg), vw, vh)
+        inner = self.case.inner
+        cv2.rectangle(view,
+                      (int(inner.x * scale), int(inner.y * scale)),
+                      (int((inner.x + inner.width) * scale),
+                       int((inner.y + inner.height) * scale)),
+                      (0, 0, 255), 2)
+        cv2.imwrite(str(out), view)
 
     # ---- state updates -------------------------------------------------------
 

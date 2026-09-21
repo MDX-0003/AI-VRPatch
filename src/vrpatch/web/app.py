@@ -95,8 +95,12 @@ async def img(request):
     store = get_store(name)
     if store is None or "/" in fn or "\\" in fn:
         return JSONResponse({"error": "not found"}, status_code=404)
-    # both previews are regenerated on demand under their content-key names
-    p = store.erp_png() if fn == "erp.png" else store.viewport_png()
+    if fn == "erp.png":
+        p = store.erp_png()
+    elif fn == "vp.png":
+        p = store.viewport_png()
+    else:
+        return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(p)
 
 
