@@ -111,6 +111,37 @@ def test_frame_out_of_range(store):
         store.viewport_png(frame=-1)
 
 
+def test_store_construction_decodes_nothing(store):
+    # every case.toml write rebuilds the store — construction must stay cheap
+    assert store._erp_lru == {}
+    store.viewport_png()                       # lazy: first request decodes
+    assert 0 in store._erp_lru
+
+
+def test_erp_lru_bounded_and_reuses(store, monkeypatch):
+    import vrpatch.web.render as render_mod
+    calls = []
+    orig = render_mod._read_frame
+
+    def counting(video, index):
+        calls.append(index)
+        return orig(video, index)
+
+    monkeypatch.setattr(render_mod, "_read_frame", counting)
+    n = render_mod.ERP_MEDIUM_LRU + 3
+    for f in range(n):                         # walk past the LRU size
+        store.viewport_png(frame=f)
+        assert len(store._erp_lru) <= render_mod.ERP_MEDIUM_LRU
+    assert len(calls) == n                     # each frame decoded exactly once
+    # the point of the LRU: a viewport move wipes the JPEG cache (new geo dir)
+    # but NOT the decoded frames — reprojection happens without a re-decode
+    store.set_viewport_from_erp_click(0.25, 0.25)
+    store.viewport_png(frame=n - 1)            # still resident in the LRU
+    assert len(calls) == n
+    store.viewport_png(frame=n)                # never seen -> decoded once
+    assert calls.count(n) == 1
+
+
 # ---- /img route: frame parameter handling ---------------------------------
 
 class _ImgRequest:

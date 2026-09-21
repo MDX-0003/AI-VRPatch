@@ -3,14 +3,16 @@
 The ERP pane needs no server rendering at all: the dashboard scrubs the
 source video in a native <video> element (browser decode, zero files). Only
 the viewport preview is a reprojection, so it stays server-side (projection
-math has one authority). Resolution policy: the startup frame is decoded once
-and kept at MEDIUM_W (4K) for the default preview; any other frame is decoded
-on demand (~1s on 8K) and cached as a JPEG under derived/pick/vpframes/.
+math has one authority). Decoded 4K ERP frames are kept in a small in-RAM LRU
+(geometry-independent, survives viewport moves); the reprojected JPEG cache
+under derived/pick/vpframes/ is bounded by the source frame count. Nothing is
+decoded at store construction — every case.toml write rebuilds the store, and
+eager decoding used to burn ~0.5s per geometry edit.
 
 The preview response is composed in memory (no shared file to rewrite under a
 streaming reader — that once produced torn downloads). derived/pick/ itself
-is a *regenerable cache*: per-frame JPEGs bounded by the source frame count,
-each render drops leftovers from older schemes; safe to delete at any time.
+is a *regenerable cache*: safe to delete at any time; each render drops
+leftovers from older schemes.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from ..projection import erp_to_rect
 VIEWPORT_PREVIEW_W = 960  # viewport preview cap
 MEDIUM_W = 4096        # cached working copy of the source frame
 FRAME_JPEG_Q = 85      # per-frame viewport cache quality
+ERP_MEDIUM_LRU = 8     # decoded 4K ERP frames kept in RAM (8 * ~25MB ≈ 200MB)
 
 
 def _read_frame(video: str, index: int) -> np.ndarray:
@@ -50,18 +53,18 @@ class PreviewStore:
         self.case = load_case(self.case_path)
         self.dir = self.case_path.parent / "derived" / "pick"
         self.dir.mkdir(parents=True, exist_ok=True)
-        video = self._video()
-        cap = cv2.VideoCapture(video)
+        cap = cv2.VideoCapture(self._video())
         self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
-        self._frame = _read_frame(video, 0)
-        self._med = self._medium_of(self._frame)
-        self.med_w = self._med.shape[1]
-        self.med_h = self._med.shape[0]
         self.key = self._new_key()
         # memoized (geometry, frame) -> preview PNG bytes; the response never
         # touches a shared file (see viewport_png)
         self._vp_bytes: tuple | None = None
+        # LRU of decoded 4K ERP frames. Deliberately NOT filled here: the
+        # dashboard almost always asks for frame=N, and every case.toml write
+        # rebuilds this store — eagerly decoding 8K frame 0 used to cost ~0.5s
+        # of wasted CPU per geometry edit (nudge click).
+        self._erp_lru: dict[int, np.ndarray] = {}
 
     def _medium_of(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -69,6 +72,21 @@ class PreviewStore:
             return cv2.resize(frame, (MEDIUM_W, round(h * MEDIUM_W / w)),
                               interpolation=cv2.INTER_AREA)
         return frame
+
+    def _erp_medium(self, frame: int) -> np.ndarray:
+        """Decoded 4K ERP frame, LRU-cached in RAM. Geometry-independent, so
+        it survives viewport moves: after a nudge, reprojecting any LRU-hit
+        frame costs ~50ms instead of an 8K re-seek (~1s)."""
+        med = self._erp_lru.get(frame)
+        if med is not None:
+            self._erp_lru.pop(frame)           # re-insert at the end: LRU touch
+            self._erp_lru[frame] = med
+            return med
+        med = self._medium_of(_read_frame(self._video(), frame))
+        self._erp_lru[frame] = med
+        while len(self._erp_lru) > ERP_MEDIUM_LRU:
+            self._erp_lru.pop(next(iter(self._erp_lru)))   # evict oldest
+        return med
 
     def _video(self) -> str:
         p = Path(self.case.source.path)
@@ -94,14 +112,14 @@ class PreviewStore:
         """PNG bytes of the viewport preview: the frame reprojection with the
         inner overlay drawn on. Composed in memory and memoized by (geometry,
         frame) — a shared vp.png file got rewritten under concurrent responses
-        and served torn downloads. frame=None reprojects the cached startup
-        frame (fast default); frame=N decodes that source frame (~1s on 8K)
-        through the vpframes/ JPEG cache."""
+        and served torn downloads. frame=None reprojects the startup frame
+        (frame 0); frame=N goes through the vpframes/ JPEG cache, decoding
+        that source frame (~1s on 8K) only on a cold LRU."""
         stamp = (self.key, frame)
         if self._vp_bytes and self._vp_bytes[0] == stamp:
             return self._vp_bytes[1]
         if frame is None:
-            view = self._reproject(self._med)
+            view = self._reproject(self._erp_medium(0))
         else:
             cached = self.viewport_frame_path(frame)
             view = cv2.imread(str(cached))
@@ -127,7 +145,7 @@ class PreviewStore:
         d = self.dir / "vpframes" / self._vp_geo_key()
         out = d / f"vp_{frame:06d}.jpg"
         if not out.exists():
-            view = self._reproject(self._medium_of(_read_frame(self._video(), frame)))
+            view = self._reproject(self._erp_medium(frame))
             d.mkdir(parents=True, exist_ok=True)
             tmp = d / f"{out.stem}.{threading.get_ident()}.tmp.jpg"
             cv2.imwrite(str(tmp), view, [cv2.IMWRITE_JPEG_QUALITY, FRAME_JPEG_Q])
