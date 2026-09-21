@@ -98,7 +98,19 @@ async def img(request):
     if fn == "erp.png":
         p = store.erp_png()
     elif fn == "vp.png":
-        p = store.viewport_png()
+        raw = request.query_params.get("frame")
+        if raw is None:
+            frame = None
+        else:
+            try:
+                frame = int(raw)
+            except ValueError:
+                return JSONResponse({"error": "frame must be an integer"},
+                                    status_code=400)
+        try:
+            p = store.viewport_png(frame)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
     else:
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(p)
@@ -142,10 +154,13 @@ def _case_info(name: str) -> dict | None:
     derived = cp.parent / "derived"
     versions = _versions(cp.parent)
     latest = versions[-1] if versions else None
+    store = get_store(name)
     info = {
         "name": name,
         "frames": [c.frame_start, c.frame_end],
+        "source_frames": store.frame_count if store else None,
         "fps": c.fps,
+        "source_url": "/sources/" + Path(c.source.path).name,
         "erp": [c.erp_width, c.erp_height],
         "viewport": {"yaw": c.viewport.yaw_deg, "pitch": c.viewport.pitch_deg,
                      "fov": c.viewport.fov_h_deg,
@@ -441,6 +456,8 @@ def build_app() -> Starlette:
     app.add_middleware(NoStoreMiddleware)
     app.mount("/static", StaticFiles(directory=str(_TEMPLATES.parent / "static")),
               name="static")
+    # source videos for the <video> scrubber (Range-capable FileResponse)
+    app.mount("/sources", StaticFiles(directory=str(sources_dir())), name="sources")
     return app
 
 

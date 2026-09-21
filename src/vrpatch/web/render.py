@@ -11,13 +11,16 @@ cached bases — milliseconds, not seconds.
 Previews are written under <case dir>/derived/pick/ under two fixed names
 (erp.png / vp.png). The directory is a *regenerable cache*: safe to delete at
 any time, and kept bounded — each render drops leftover files from older
-schemes (content-keyed names), so the directory never grows beyond the fixed
-previews plus explicitly bounded subdirectories.
+schemes (content-keyed names) and stale viewport-geometry cache dirs, so the
+directory never grows beyond the fixed previews plus the per-frame viewport
+JPEGs, which are bounded by the source frame count and invalidated (then
+GC'd) whenever the viewport geometry moves.
 """
 
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 
 import cv2
@@ -29,6 +32,7 @@ from ..projection import (_direction_to_erp_px, camera_rotation, erp_to_rect)
 ERP_PREVIEW_W = 1024   # ERP preview (2:1)
 VIEWPORT_PREVIEW_W = 960  # viewport preview cap
 MEDIUM_W = 4096        # cached working copy of the source frame
+FRAME_JPEG_Q = 85      # per-frame viewport cache quality
 
 
 def _read_frame(video: str, index: int) -> np.ndarray:
@@ -50,14 +54,12 @@ class PreviewStore:
         self.case = load_case(self.case_path)
         self.dir = self.case_path.parent / "derived" / "pick"
         self.dir.mkdir(parents=True, exist_ok=True)
-        self._frame = _read_frame(self._video(), 0)
-        src_h, src_w = self._frame.shape[:2]
-        if src_w > MEDIUM_W:
-            med_h = round(src_h * MEDIUM_W / src_w)
-            self._med = cv2.resize(self._frame, (MEDIUM_W, med_h),
-                                   interpolation=cv2.INTER_AREA)
-        else:
-            self._med = self._frame
+        video = self._video()
+        cap = cv2.VideoCapture(video)
+        self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        self._frame = _read_frame(video, 0)
+        self._med = self._medium_of(self._frame)
         self.med_w = self._med.shape[1]
         self.med_h = self._med.shape[0]
         self._erp_small = cv2.resize(self._med, (ERP_PREVIEW_W, ERP_PREVIEW_W // 2),
@@ -68,6 +70,13 @@ class PreviewStore:
         # file existence (which would serve a stale picture after a move)
         self._rendered: dict[str, str] = {}
 
+    def _medium_of(self, frame: np.ndarray) -> np.ndarray:
+        h, w = frame.shape[:2]
+        if w > MEDIUM_W:
+            return cv2.resize(frame, (MEDIUM_W, round(h * MEDIUM_W / w)),
+                              interpolation=cv2.INTER_AREA)
+        return frame
+
     def _video(self) -> str:
         p = Path(self.case.source.path)
         return str(p if p.is_absolute() else self.case_path.parent / p)
@@ -75,6 +84,11 @@ class PreviewStore:
     def _new_key(self) -> str:
         return hashlib.sha1(
             f"{self.case.viewport}|{self.case.inner}".encode()).hexdigest()[:10]
+
+    def _vp_geo_key(self) -> str:
+        """Viewport geometry only (inner excluded on purpose: dragging the
+        inner rect must not invalidate the per-frame reprojection cache)."""
+        return hashlib.sha1(str(self.case.viewport).encode()).hexdigest()[:10]
 
     def touch(self):
         """Invalidate after a geometry mutation that bypassed set_viewport/
@@ -88,10 +102,58 @@ class PreviewStore:
         self._render("erp", out, self._draw_erp)
         return out
 
-    def viewport_png(self) -> Path:
+    def viewport_png(self, frame: int | None = None) -> Path:
+        """Viewport preview with the inner overlay. frame=None reprojects from
+        the cached startup frame (fast default); frame=N decodes that source
+        frame (~0.5s on 8K) through the reprojection cache in vpframes/."""
         out = self.dir / "vp.png"
-        self._render("vp", out, self._draw_vp)
+        stamp = (self.key, frame)
+        if out.exists() and self._rendered.get("vp") == stamp:
+            return out
+        if frame is None:
+            view = self._reproject(self._med)
+        else:
+            cached = self.viewport_frame_path(frame)
+            view = cv2.imread(str(cached))
+            if view is None:
+                raise RuntimeError(f"frame cache unreadable: {cached}")
+        self._draw_inner(view)
+        cv2.imwrite(str(out), view)
+        self._rendered["vp"] = stamp
+        self._gc()
         return out
+
+    def viewport_frame_path(self, frame: int) -> Path:
+        """Clean reprojection of one source frame (NO overlay: geometry moves
+        must not invalidate these). Bounded by the frame count; invalidated
+        per viewport geometry via the vpframes/<geo key>/ layout."""
+        if not 0 <= frame < self.frame_count:
+            raise ValueError(f"frame {frame} out of range 0..{self.frame_count - 1}")
+        d = self.dir / "vpframes" / self._vp_geo_key()
+        out = d / f"vp_{frame:06d}.jpg"
+        if not out.exists():
+            view = self._reproject(self._medium_of(_read_frame(self._video(), frame)))
+            d.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(out), view, [cv2.IMWRITE_JPEG_QUALITY, FRAME_JPEG_Q])
+        return out
+
+    def _reproject(self, med: np.ndarray) -> np.ndarray:
+        vp = self.case.viewport
+        scale = min(VIEWPORT_PREVIEW_W / vp.width, 1.0)
+        vw, vh = int(round(vp.width * scale)), int(round(vp.height * scale))
+        return erp_to_rect(med, np.radians(vp.yaw_deg),
+                           np.radians(vp.pitch_deg),
+                           np.radians(vp.fov_h_deg), vw, vh)
+
+    def _draw_inner(self, view: np.ndarray):
+        vp = self.case.viewport
+        scale = min(VIEWPORT_PREVIEW_W / vp.width, 1.0)
+        inner = self.case.inner
+        cv2.rectangle(view,
+                      (int(inner.x * scale), int(inner.y * scale)),
+                      (int((inner.x + inner.width) * scale),
+                       int((inner.y + inner.height) * scale)),
+                      (0, 0, 255), 2)
 
     def _render(self, name: str, out: Path, draw) -> None:
         if out.exists() and self._rendered.get(name) == self.key:
@@ -99,13 +161,6 @@ class PreviewStore:
         draw(out)
         self._rendered[name] = self.key
         self._gc()
-
-    def _gc(self):
-        """Keep derived/pick bounded: this directory is a regenerable cache,
-        so any file in the preview namespace we did not just write (leftovers
-        from the older content-keyed names) is deleted on every render."""
-        for legacy in (*self.dir.glob("erp_*.png"), *self.dir.glob("vp_*.png")):
-            legacy.unlink(missing_ok=True)
 
     def _draw_erp(self, out: Path):
         small = self._erp_small.copy()
@@ -122,22 +177,18 @@ class PreviewStore:
                       (cx + fw // 2, cy + fh // 2), (0, 255, 0), 1)
         cv2.imwrite(str(out), small)
 
-    def _draw_vp(self, out: Path):
-        vp = self.case.viewport
-        scale = min(VIEWPORT_PREVIEW_W / vp.width, 1.0)
-        vw, vh = int(round(vp.width * scale)), int(round(vp.height * scale))
-        # reproject from the medium ERP, proportionally sized — same
-        # geometry, a fraction of the pixels
-        view = erp_to_rect(self._med, np.radians(vp.yaw_deg),
-                           np.radians(vp.pitch_deg),
-                           np.radians(vp.fov_h_deg), vw, vh)
-        inner = self.case.inner
-        cv2.rectangle(view,
-                      (int(inner.x * scale), int(inner.y * scale)),
-                      (int((inner.x + inner.width) * scale),
-                       int((inner.y + inner.height) * scale)),
-                      (0, 0, 255), 2)
-        cv2.imwrite(str(out), view)
+    def _gc(self):
+        """Keep derived/pick bounded: this directory is a regenerable cache,
+        so anything in the preview namespace we did not just write is deleted
+        — leftovers from the older content-keyed names, and vpframes dirs of
+        older viewport geometries."""
+        for legacy in (*self.dir.glob("erp_*.png"), *self.dir.glob("vp_*.png")):
+            legacy.unlink(missing_ok=True)
+        vpf = self.dir / "vpframes"
+        if vpf.is_dir():
+            for d in vpf.iterdir():
+                if d.is_dir() and d.name != self._vp_geo_key():
+                    shutil.rmtree(d, ignore_errors=True)
 
     # ---- state updates -------------------------------------------------------
 
