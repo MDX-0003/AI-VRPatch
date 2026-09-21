@@ -23,7 +23,8 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
-from ..case import load_case, set_draft_geometry, extract_version
+from ..case import load_case, set_draft_geometry, extract_version, viewports_match
+from ..sidecar import Viewport
 from .render import PreviewStore
 from .tasks import QUEUE
 
@@ -332,7 +333,14 @@ async def api_nudge(request):
 
 async def api_merge(request):
     """Merge one extract version: that directory's clip.json + its registered
-    ai_clip. Which version to merge is a human choice in the dashboard."""
+    ai_clip. Which version to merge is a human choice in the dashboard.
+
+    The blend window (inner) is a live creative choice, not version state: the
+    version's clip.json records the rect the AI was masked with at extract
+    time, but paste-back uses the CURRENT DRAFT inner (--report records what
+    actually ran). Inner is in viewport pixels, so it is only accepted while
+    the draft viewport still matches the version's — otherwise the box would
+    land somewhere else than drawn, and the request is refused instead."""
     name = request.path_params["name"]
     cp = case_path(name)
     if cp is None:
@@ -354,13 +362,21 @@ async def api_merge(request):
         return JSONResponse({"error": f"extract {version} has no AI clip "
                                       f"registered"}, status_code=400)
     vdir = cp.parent / "extracts" / version
+    seg = json.loads((vdir / "clip.json").read_text(encoding="utf-8"))["segments"][0]
+    if not viewports_match(c.viewport, Viewport(**seg["viewport"])):
+        return JSONResponse({"error": "当前视口与视频切分时有所偏差，请重置视口"},
+                            status_code=409)
     out = cp.parent / "derived" / f"out_{version}.mp4"
+    inner = c.inner
     argv = [sys_executable(), "-m", "vrpatch.cli.merge",
             "--input", str((cp.parent / c.source.path).resolve()),
             "--ai", ver["ai_clip"], "--sidecar", str(vdir / "clip.json"),
-            "--output", str(out)]
+            "--output", str(out),
+            "--inner", f"{inner.x},{inner.y},{inner.width},{inner.height}",
+            "--report", str(out.with_name(out.stem + ".merge.json"))]
     QUEUE.submit("merge", name, argv)
-    return JSONResponse({"submitted": "merge", "case": name, "version": version})
+    return JSONResponse({"submitted": "merge", "case": name, "version": version,
+                         "inner": [inner.x, inner.y, inner.width, inner.height]})
 
 
 async def api_task(request):

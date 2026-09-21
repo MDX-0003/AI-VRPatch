@@ -115,6 +115,25 @@ def set_draft_geometry(case_path: str | Path, *, yaw: float, pitch: float,
         "x": x, "y": y, "width": w, "height": h})
 
 
+VIEWPORT_TOL_DEG = 0.05  # half a joystick step (0.1°) — anything smaller is round-trip noise
+
+
+def viewports_match(a: Viewport, b: Viewport, tol: float = VIEWPORT_TOL_DEG) -> bool:
+    """True when two viewports still describe the same camera: yaw/pitch/fov
+    within `tol` degrees (yaw compared cyclically at ±180), pixel size exact.
+
+    The web merge pastes back with the *draft* inner rect, and inner is
+    expressed in viewport pixels — so it is only meaningful while the draft
+    viewport still agrees with the one the extract version was cut with.
+    """
+    def ang_diff(d: float) -> float:
+        return abs((d + 180.0) % 360.0 - 180.0)
+    return (ang_diff(a.yaw_deg - b.yaw_deg) <= tol
+            and abs(a.pitch_deg - b.pitch_deg) <= tol
+            and abs(a.fov_h_deg - b.fov_h_deg) <= tol
+            and (a.width, a.height) == (b.width, b.height))
+
+
 def _set_section(case_path: str | Path, section: str, kv: dict) -> None:
     """Replace the `[section]` table with the given keys (textual, keeps the
     rest of the file byte-stable). Windows paths are written as TOML literal

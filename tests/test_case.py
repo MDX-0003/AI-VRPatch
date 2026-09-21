@@ -5,7 +5,8 @@ import json
 import pytest
 
 from vrpatch.case import (load_case, case_to_sidecar, record_sha256,
-                          load_sidecar_single_segment, set_draft_geometry)
+                          load_sidecar_single_segment, set_draft_geometry,
+                          viewports_match)
 from vrpatch.sidecar import save_sidecar, Sidecar, Segment, Viewport, InnerRect
 
 
@@ -75,6 +76,20 @@ def test_set_draft_geometry(tmp_path):
     assert (c.viewport.width, c.viewport.height) == (640, 360)
     assert (c.inner.x, c.inner.y, c.inner.width, c.inner.height) == (1, 2, 3, 4)
     assert c.source.path == "src.bin" and c.frame_end == 9  # rest untouched
+
+
+def test_viewports_match():
+    """Merge's draft-inner guard: the draft viewport must still agree with the
+    version's — tolerance is half a joystick step, yaw compares cyclically."""
+    v = Viewport(yaw_deg=-7.3, pitch_deg=-10.1, fov_h_deg=59.0, width=1920, height=1080)
+    assert viewports_match(v, Viewport(-7.3, -10.1, 59.0, 1920, 1080))
+    assert viewports_match(v, Viewport(-7.31, -10.101, 59.001, 1920, 1080))  # noise
+    assert viewports_match(Viewport(179.99, 0.0, 59.0, 1920, 1080),
+                           Viewport(-179.99, 0.0, 59.0, 1920, 1080))         # yaw ±180 wrap
+    assert not viewports_match(v, Viewport(-7.2, -10.1, 59.0, 1920, 1080))   # one step
+    assert not viewports_match(v, Viewport(-7.3, -10.0, 59.0, 1920, 1080))
+    assert not viewports_match(v, Viewport(-7.3, -10.1, 58.9, 1920, 1080))
+    assert not viewports_match(v, Viewport(-7.3, -10.1, 59.0, 1280, 720))    # size exact
 
 
 def test_single_segment_guard(tmp_path):
