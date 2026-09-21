@@ -99,6 +99,7 @@ async function refreshCase() {
   const changed = !CUR || CUR.name !== c.name || infoSig(CUR) !== infoSig(c);
   CUR = c;
   if (!changed) return;          // idle poll: leave video/overlays/previews alone
+  prefetched.clear();            // geometry moved: old neighbour URLs are stale
   setVideoCase(c);
   drawErpOverlays();
   refreshVp();
@@ -129,8 +130,12 @@ function updateFrameLabel() {
   $("frameLabel").textContent = `${scrub.frame}/${scrub.count}`;
 }
 
-function gotoFrame(n) {
+function gotoFrame(n, vpDelay = 150) {
+  // vpDelay: how long to wait before re-rendering the viewport preview.
+  // ◁▷ pass 0 (single step: show it now); the slider keeps a debounce so
+  // dragging fires one render instead of one per pixel.
   scrub.frame = Math.max(0, Math.min(scrub.count - 1, n));
+  scrub.vpDelay = vpDelay;
   $("frameSlider").value = scrub.frame;
   updateFrameLabel();
   const v = $("erpVid");
@@ -170,7 +175,28 @@ function refreshVp() {
   $("vpImg").src = `${CUR.previews.vp}${f}&t=${Date.now()}`;
 }
 
-function scheduleVpRefresh(delay = 350) {
+// after a preview lands, silently ask the server for the neighbouring frames:
+// their JPEGs get baked into the (regenerable) cache, so the next ◁▷ step
+// reprojects from the in-RAM LRU (~50ms) instead of an 8K re-seek (~1s).
+// Staggered and deduplicated so we never pile up renders.
+const prefetched = new Set();
+
+function prefetchNeighbors() {
+  if (!CUR || !CUR.previews) return;
+  let delay = 0;
+  for (const f of [scrub.frame - 1, scrub.frame + 1]) {
+    if (f < 0 || f >= scrub.count) continue;
+    const key = `${CUR.name}|${CUR.previews.vp}|${f}`;
+    if (prefetched.has(key)) continue;
+    prefetched.add(key);
+    setTimeout(() => {
+      new Image().src = `${CUR.previews.vp}&frame=${f}&t=${Date.now()}`;
+    }, delay);
+    delay += 400;
+  }
+}
+
+function scheduleVpRefresh(delay = 150) {
   clearTimeout(vpTimer);
   vpTimer = setTimeout(() => {
     vpTimer = null;
@@ -188,7 +214,7 @@ function scheduleVpRefresh(delay = 350) {
     if (scrub.count > 0) scrub.frame = Math.round(v.currentTime * scrub.fps);
     $("frameSlider").value = scrub.frame;
     updateFrameLabel();
-    scheduleVpRefresh();
+    scheduleVpRefresh(scrub.vpDelay);
   });
   v.addEventListener("timeupdate", () => {
     if (v.paused) return;              // seeks handled by 'seeked'
@@ -205,12 +231,13 @@ function scheduleVpRefresh(delay = 350) {
     if (!v.src) return;
     if (v.paused) v.play(); else v.pause();
   };
-  $("btnPrev").onclick = () => gotoFrame(scrub.frame - 1);
-  $("btnNext").onclick = () => gotoFrame(scrub.frame + 1);
+  $("btnPrev").onclick = () => gotoFrame(scrub.frame - 1, 0);
+  $("btnNext").onclick = () => gotoFrame(scrub.frame + 1, 0);
   $("frameSlider").addEventListener("input",
-    (e) => gotoFrame(parseInt(e.target.value, 10)));
+    (e) => gotoFrame(parseInt(e.target.value, 10)));   // default 150ms debounce
 }
 window.addEventListener("resize", drawErpOverlays);
+$("vpImg").addEventListener("load", prefetchNeighbors);
 
 // pipeline badges reflect the SELECTED extract version
 async function updatePipeline(c) {
